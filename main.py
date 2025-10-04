@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from app.api.v1.users import router as users_router
 from app.api.v1.teams import router as teams_router
@@ -38,8 +39,13 @@ app.include_router(lookups_router, prefix="/api/v1")
 async def on_startup():
     # Initialize Mongo client
     get_mongo_client()
-    # Create required indexes
-    await ensure_indexes()
+    # Create required indexes (non-fatal on failure)
+    try:
+        await ensure_indexes()
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").warning(
+            "Mongo index initialization failed: %s", exc
+        )
 
 
 @app.on_event("shutdown")

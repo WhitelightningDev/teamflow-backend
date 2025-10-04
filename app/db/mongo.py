@@ -10,7 +10,14 @@ _mongo_client: Optional[AsyncIOMotorClient] = None
 def get_mongo_client() -> AsyncIOMotorClient:
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
+        # Use certifi CA bundle to avoid SSL verify errors with Atlas
+        client_kwargs = {"serverSelectionTimeoutMS": 30000}
+        try:
+            import certifi  # type: ignore
+            client_kwargs["tlsCAFile"] = certifi.where()
+        except Exception:
+            pass
+        _mongo_client = AsyncIOMotorClient(settings.MONGODB_URI, **client_kwargs)
     return _mongo_client
 
 
@@ -24,4 +31,3 @@ def close_mongo_client() -> None:
     if _mongo_client is not None:
         _mongo_client.close()
         _mongo_client = None
-
