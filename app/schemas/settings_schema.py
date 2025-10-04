@@ -1,5 +1,6 @@
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 class ProfileIn(BaseModel):
@@ -48,3 +49,18 @@ class NotificationSettingsOut(BaseModel):
     email_notifications: bool
     push_notifications: bool
 
+
+# MongoDB settings collection document schema
+class SettingsNotification(BaseModel):
+    email: bool
+    push: bool
+
+
+class SettingsDocument(BaseModel):
+    id: Optional[str] = Field(default=None, alias="_id")
+    company_id: str
+    notification_settings: SettingsNotification
+    updated_at: datetime
+    created_at: datetime
+
+    model_config = ConfigDict(populate_by_name=True)
