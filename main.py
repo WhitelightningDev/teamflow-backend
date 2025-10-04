@@ -1,6 +1,12 @@
 from fastapi import FastAPI
 from app.api.v1.users import router as users_router
 from app.api.v1.teams import router as teams_router
+from app.api.v1.auth import router as auth_router
+from app.api.v1.employees import router as employees_router
+from app.api.v1.leaves import router as leaves_router
+from app.api.v1.documents import router as documents_router
+from app.api.v1.settings import router as settings_router
+from app.api.v1.lookups import router as lookups_router
 
 app = FastAPI(title="TeamsFlow Backend")
 
@@ -18,3 +24,9 @@ def health_check():
 # Mount API routers
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(teams_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(employees_router, prefix="/api/v1")
+app.include_router(leaves_router, prefix="/api/v1")
+app.include_router(documents_router, prefix="/api/v1")
+app.include_router(settings_router, prefix="/api/v1")
+app.include_router(lookups_router, prefix="/api/v1")

@@ -3,6 +3,16 @@ import secrets
 from datetime import datetime, timedelta
 
 
+def get_current_user():
+    # Placeholder dependency to simulate authenticated user
+    return {
+        "id": 1,
+        "first_name": "Demo",
+        "last_name": "User",
+        "email": "demo@example.com",
+    }
+
+
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
@@ -17,4 +27,3 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
     token = secrets.token_urlsafe(32)
     # In a real setup, you would sign a JWT here with SECRET_KEY
     return f"tok_{token}"
-
