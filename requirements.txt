@@ -3,3 +3,6 @@ uvicorn[standard]
 sqlalchemy
 pydantic
 python-dotenv
+motor[srv]
+certifi
+dnspython>=2.2
