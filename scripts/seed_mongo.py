@@ -62,8 +62,16 @@ async def seed_lookups(db):
         ("leave_statuses", "cancelled", "Cancelled", 4),
         ("roles", "admin", "Admin", 1),
         ("roles", "manager", "Manager", 2),
-        ("roles", "employee", "Employee", 3),
-        ("roles", "staff", "Staff", 4),
+        ("roles", "supervisor", "Supervisor", 3),
+        ("roles", "hr", "HR", 4),
+        ("roles", "employee", "Employee", 5),
+        ("roles", "staff", "Staff", 6),
+        ("roles", "guest", "Guest", 7),
+        ("roles", "viewer", "Viewer", 8),
+        ("roles", "payroll", "Payroll", 9),
+        ("roles", "recruiter", "Recruiter", 10),
+        ("roles", "trainer", "Trainer", 11),
+        ("roles", "benefit_admin", "Benefits Admin", 12),
     ]
     for category, code, label, seq in items:
         await db["lookups"].update_one(

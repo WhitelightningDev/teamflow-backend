@@ -1,13 +1,14 @@
 from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from .common import Role
 
 
 class EmployeeIn(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    role: str = "employee"
+    role: Role = Role.employee
     title: Optional[str] = None
     start_date: date
     manager_id: Optional[int] = None
@@ -18,7 +19,7 @@ class EmployeeUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
-    role: Optional[str] = None
+    role: Optional[Role] = None
     title: Optional[str] = None
     start_date: Optional[date] = None
     manager_id: Optional[int] = None
@@ -30,7 +31,7 @@ class EmployeeOut(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    role: str
+    role: Role
     title: Optional[str] = None
     start_date: date
     manager_id: Optional[int] = None
@@ -51,7 +52,7 @@ class EmployeeDocument(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    role: str  # e.g., "staff", "manager"
+    role: Role  # e.g., manager, hr, staff
     status: str  # e.g., active, terminated, on_leave
     date_hired: date
     date_terminated: Optional[date] = None
