@@ -6,4 +6,4 @@ python-dotenv
 motor[srv]
 certifi
 dnspython>=2.2
-PyJWT
+python-jose[cryptography]

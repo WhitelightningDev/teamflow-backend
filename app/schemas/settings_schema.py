@@ -13,7 +13,7 @@ class ProfileIn(BaseModel):
 
 
 class ProfileOut(BaseModel):
-    id: int
+    id: str
     first_name: str
     last_name: str
     email: EmailStr
@@ -34,7 +34,7 @@ class CompanyUpdate(BaseModel):
 
 
 class CompanyOut(BaseModel):
-    id: int
+    id: str
     name: str
     domain: str
     timezone: str
