@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date as _date
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -88,6 +88,10 @@ async def create_employee(
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     })
+    # Ensure Mongo stores datetimes, not date-only
+    if isinstance(doc.get("start_date"), _date) and not isinstance(doc.get("start_date"), datetime):
+        sd = doc["start_date"]
+        doc["start_date"] = datetime(sd.year, sd.month, sd.day)
     res = await db["employees"].insert_one(doc)
     return {"id": str(res.inserted_id), **payload.model_dump(), "is_active": payload.model_dump().get("is_active", True)}
 
