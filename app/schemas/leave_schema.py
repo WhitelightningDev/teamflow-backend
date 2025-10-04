@@ -12,8 +12,8 @@ class LeaveIn(BaseModel):
 
 
 class LeaveOut(BaseModel):
-    id: int
-    employee_id: int
+    id: str
+    employee_id: str
     leave_type: str
     start_date: date
     end_date: date

@@ -4,11 +4,11 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 class DocumentOut(BaseModel):
-    id: int
+    id: str
     filename: str
     content_type: str | None
     size: int
-    uploaded_by: int
+    uploaded_by: int | str | None
     uploaded_at: datetime
 
 

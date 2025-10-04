@@ -79,6 +79,16 @@ Quickstart
   - `uvicorn main:app --reload --port 5001`
   - Health: GET `http://localhost:5001/health`
 
+Seeding MongoDB
+- Purpose: populate required collections with sample data (companies, settings, lookups, users, employees, leaves, documents).
+- Command:
+  - `python -m scripts.seed_mongo`
+  - or `python scripts/seed_mongo.py`
+- Behavior:
+  - Idempotent upserts using stable IDs and unique keys (won't duplicate on repeated runs).
+  - Ensures MongoDB indexes before inserting.
+  - Uses `.env` for `MONGODB_URI` and `MONGODB_DB_NAME`.
+
 Configuration
 - `.env` is loaded by `python-dotenv` in `app/core/config.py`.
 - MongoDB
