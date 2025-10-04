@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, Literal
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from .common import Role
 
 
 class DocumentOut(BaseModel):
@@ -27,7 +28,7 @@ class UserDocument(BaseModel):
     password_hash: str
     first_name: str
     last_name: str
-    role: Literal["admin", "manager", "user"]
+    role: Role
     company_id: str  # ObjectId as string in API layer
     created_at: datetime
     updated_at: datetime

@@ -18,5 +18,17 @@ def get_statuses(db=Depends(get_db), current_user=Depends(get_current_user)):
 
 @router.get("/roles", response_model=List[str])
 def get_roles(db=Depends(get_db), current_user=Depends(get_current_user)):
-    return ["admin", "manager", "employee"]
-
+    return [
+        "admin",
+        "manager",
+        "supervisor",
+        "hr",
+        "employee",
+        "staff",
+        "guest",
+        "viewer",
+        "payroll",
+        "recruiter",
+        "trainer",
+        "benefit_admin",
+    ]

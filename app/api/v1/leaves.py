@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date as _date
 from fastapi import APIRouter, Depends, Query, Path, HTTPException
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -78,6 +78,11 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
         "created_at": now,
         "updated_at": now,
     })
+    # Convert date-only fields to datetimes for Mongo
+    for k in ("start_date", "end_date"):
+        v = doc.get(k)
+        if isinstance(v, _date) and not isinstance(v, datetime):
+            doc[k] = datetime(v.year, v.month, v.day)
     res = await db["leaves"].insert_one(doc)
     return {
         "id": str(res.inserted_id),
