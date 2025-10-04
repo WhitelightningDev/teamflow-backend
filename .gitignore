@@ -1,0 +1,72 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+MANIFEST
+pip-wheel-metadata/
+
+# Virtual environments
+.env
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.python-version
+
+# Testing / coverage
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache/
+
+# Type checkers
+.pytype/
+.pyre/
+
+# Logs and temp files
+*.log
+logs/
+tmp/
+temp/
+
+# Local data / databases
+*.db
+*.sqlite
+*.sqlite3
+app.db
+uploads/
+media/
+
+# IDE / editor settings
+.idea/
+.vscode/
+*.code-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Node (just in case)
+node_modules/
+
+# Docs builds
+site/
+docs/_build/
