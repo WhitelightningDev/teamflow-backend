@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-import jwt
+from jose import jwt
 from fastapi import Header, HTTPException, status
 from bson import ObjectId
 

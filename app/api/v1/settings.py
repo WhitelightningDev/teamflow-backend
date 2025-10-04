@@ -92,9 +92,10 @@ async def update_notifications(payload: NotificationSettingsUpdate, current_user
         ns["email"] = bool(patch["email_notifications"])
     if "push_notifications" in patch:
         ns["push"] = bool(patch["push_notifications"])
+    created_at = s.get("created_at") if s else datetime.utcnow()
     await db["settings"].update_one(
         {"company_id": ObjectId(current_user["company_id"])},
-        {"$set": {"notification_settings": ns, "updated_at": datetime.utcnow(), "created_at": s.get("created_at", datetime.utcnow())}},
+        {"$set": {"notification_settings": ns, "updated_at": datetime.utcnow(), "created_at": created_at}},
         upsert=True,
     )
     return {"email_notifications": bool(ns.get("email", True)), "push_notifications": bool(ns.get("push", False))}
