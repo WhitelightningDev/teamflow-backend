@@ -72,3 +72,6 @@ node_modules/
 # Docs builds
 site/
 docs/_build/
+
+
+/Users/user/Desktop/teamsflow-backend/venv/lib/python3.11/site-packages/dns
