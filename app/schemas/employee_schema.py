@@ -26,7 +26,7 @@ class EmployeeUpdate(BaseModel):
 
 
 class EmployeeOut(BaseModel):
-    id: int
+    id: str
     first_name: str
     last_name: str
     email: EmailStr
