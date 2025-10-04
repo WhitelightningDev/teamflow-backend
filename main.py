@@ -1,5 +1,6 @@
 import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.users import router as users_router
 from app.api.v1.teams import router as teams_router
 from app.api.v1.auth import router as auth_router
@@ -12,6 +13,19 @@ from app.db.mongo import get_mongo_client, close_mongo_client
 from app.db.mongo_indexes import ensure_indexes
 
 app = FastAPI(title="TeamsFlow Backend")
+
+# CORS for local frontend dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://0.0.0.0:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/")

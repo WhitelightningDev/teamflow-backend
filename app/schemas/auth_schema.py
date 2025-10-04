@@ -15,7 +15,7 @@ class LoginIn(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: int
+    id: str
     first_name: str
     last_name: str
     email: EmailStr
@@ -24,4 +24,3 @@ class UserOut(BaseModel):
 class AuthResponse(BaseModel):
     user: UserOut
     token: str
-
