@@ -1,5 +1,6 @@
 from typing import Optional
 from datetime import datetime, date as _date
+from enum import Enum
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -92,6 +93,9 @@ async def create_employee(
     if isinstance(doc.get("start_date"), _date) and not isinstance(doc.get("start_date"), datetime):
         sd = doc["start_date"]
         doc["start_date"] = datetime(sd.year, sd.month, sd.day)
+    # Ensure role is stored as a primitive
+    if isinstance(doc.get("role"), Enum):
+        doc["role"] = doc["role"].value
     res = await db["employees"].insert_one(doc)
     return {"id": str(res.inserted_id), **payload.model_dump(), "is_active": payload.model_dump().get("is_active", True)}
 
@@ -105,6 +109,13 @@ async def update_employee(
 ):
     update = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     update["updated_at"] = datetime.utcnow()
+    # Coerce date-only to datetime for Mongo storage
+    if isinstance(update.get("start_date"), _date) and not isinstance(update.get("start_date"), datetime):
+        sd = update["start_date"]
+        update["start_date"] = datetime(sd.year, sd.month, sd.day)
+    # Coerce Enum to its value
+    if isinstance(update.get("role"), Enum):
+        update["role"] = update["role"].value
     await db["employees"].update_one(
         {"_id": ObjectId(employee_id), "company_id": ObjectId(current_user["company_id"])},
         {"$set": update},
