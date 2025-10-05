@@ -37,3 +37,8 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     settings = db["settings"]
     # Ensure one settings document per company (typical)
     await settings.create_index([("company_id", 1)], unique=True, name="uniq_company_id_settings")
+
+    invites = db["invites"]
+    # Unique token for invites
+    await invites.create_index([("token", 1)], unique=True, name="uniq_invite_token")
+    await invites.create_index([("expires_at", 1)], name="idx_invite_expires_at")

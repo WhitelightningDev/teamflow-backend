@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import datetime, date as _date
+from datetime import datetime, date as _date, timedelta
 from enum import Enum
 from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
 from bson import ObjectId
@@ -13,6 +13,9 @@ from app.schemas.employee_schema import (
     EmployeeUpdate,
     EmployeeListOut,
 )
+import logging
+from app.utils.email import send_invite_email
+import secrets
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -144,3 +147,60 @@ async def delete_employee(
 ):
     await db["employees"].delete_one({"_id": ObjectId(employee_id), "company_id": ObjectId(current_user["company_id"])})
     return {"status": "deleted", "id": employee_id}
+
+
+@router.post("/{employee_id}/invite")
+async def invite_employee(
+    employee_id: str = Path(...),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    current_user=Depends(get_current_user),
+):
+    # Only admin/HR/manager can invite
+    if str(current_user.get("role")) not in {"admin", "hr", "manager", "supervisor"}:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+    emp = await db["employees"].find_one({"_id": ObjectId(employee_id), "company_id": ObjectId(current_user["company_id"])})
+    if not emp:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Employee not found")
+    email = emp.get("email")
+    if not email:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Employee has no email")
+
+    token = secrets.token_urlsafe(32)
+    now = datetime.utcnow()
+    expires_at = datetime.utcnow().replace(microsecond=0) + timedelta(days=7)
+    invite = {
+        "employee_id": emp["_id"],
+        "company_id": ObjectId(current_user["company_id"]),
+        "email": email,
+        "token": token,
+        "expires_at": expires_at,
+        "used": False,
+        "created_at": now,
+    }
+    await db["invites"].insert_one(invite)
+    # Send email (placeholder)
+    url = f"https://app/accept-invite?token={token}"
+    # Try to fetch company name for nicer email
+    company = await db["companies"].find_one({"_id": ObjectId(current_user["company_id"])})
+    company_name = company.get("name", "TeamFlow") if company else "TeamFlow"
+    email_sent = True
+    try:
+        send_invite_email(to=email, invite_url=url, company_name=company_name, employee_first_name=emp.get("first_name"))
+    except Exception as exc:
+        # Do not fail the request if email sending fails; the invite token exists and can be delivered later
+        logging.getLogger("uvicorn.error").warning("Invite email send failed: %s", exc)
+        email_sent = False
+    # Log the invite URL for debugging/dev convenience
+    # Avoid using uvicorn.access for arbitrary messages; its formatter expects 5-tuple args
+    logging.getLogger("uvicorn.error").info("Invite URL for %s: %s", email, url)
+    return {
+        "status": "invited",
+        "email": email,
+        "expires_at": expires_at.isoformat() + "Z",
+        "email_sent": email_sent,
+        "invite_url": url,
+    }

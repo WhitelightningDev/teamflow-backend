@@ -4,11 +4,13 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class LeaveIn(BaseModel):
-    employee_id: int
-    leave_type: str
+    employee_id: Optional[str] = None  # ignored for employees
+    leave_type: Optional[str] = None
+    type_id: Optional[str] = None
     start_date: date
     end_date: date
     reason: Optional[str] = None
+    half_day: Optional[bool] = None
 
 
 class LeaveOut(BaseModel):
@@ -18,12 +20,17 @@ class LeaveOut(BaseModel):
     start_date: date
     end_date: date
     reason: Optional[str] = None
-    status: Literal["pending", "approved", "rejected"]
+    status: Literal["requested", "approved", "rejected", "cancelled"]
     created_at: datetime
 
 
 class LeaveDecisionIn(BaseModel):
     action: Literal["approve", "reject"]
+    comment: Optional[str] = None
+
+
+class LeaveStatusIn(BaseModel):
+    status: Literal["approved", "rejected", "cancelled"]
     comment: Optional[str] = None
 
 
