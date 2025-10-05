@@ -11,6 +11,7 @@ from app.schemas.leave_schema import (
     LeaveOut,
     LeaveDecisionIn,
     LeaveListOut,
+    LeaveStatusIn,
 )
 
 router = APIRouter(prefix="/leaves", tags=["leaves"])
@@ -27,6 +28,14 @@ async def list_leaves(
     q: dict = {"company_id": ObjectId(current_user["company_id"])}
     if status:
         q["status"] = status
+    # Restrict employees to their own requests
+    if str(current_user.get("role")) in {"employee", "staff"}:
+        me = await db["employees"].find_one({
+            "company_id": ObjectId(current_user["company_id"]),
+            "user_id": ObjectId(current_user["id"]),
+        })
+        if me:
+            q["employee_id"] = me["_id"]
     total = await db["leaves"].count_documents(q)
     cursor = db["leaves"].find(q).skip((page - 1) * size).limit(size).sort("created_at", -1)
     items = []
@@ -39,7 +48,7 @@ async def list_leaves(
                 "start_date": doc.get("start_date"),
                 "end_date": doc.get("end_date"),
                 "reason": doc.get("reason"),
-                "status": doc.get("status", "pending"),
+                "status": doc.get("status", "requested"),
                 "created_at": doc.get("created_at", datetime.utcnow()),
             }
         )
@@ -62,7 +71,7 @@ async def get_leave(
         "start_date": doc.get("start_date"),
         "end_date": doc.get("end_date"),
         "reason": doc.get("reason"),
-        "status": doc.get("status", "pending"),
+        "status": doc.get("status", "requested"),
         "created_at": doc.get("created_at", datetime.utcnow()),
     }
 
@@ -73,11 +82,22 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
     doc = payload.model_dump()
     doc.update({
         "company_id": ObjectId(current_user["company_id"]),
-        "employee_id": ObjectId(str(doc["employee_id"])) if doc.get("employee_id") is not None else None,
-        "status": "pending",
+        "status": "requested",
         "created_at": now,
         "updated_at": now,
     })
+    # Derive employee_id for employee role; else allow provided ID
+    if str(current_user.get("role")) in {"employee", "staff"}:
+        me = await db["employees"].find_one({
+            "company_id": ObjectId(current_user["company_id"]),
+            "user_id": ObjectId(current_user["id"]),
+        })
+        if not me:
+            raise HTTPException(status_code=400, detail="No employee profile linked to your account")
+        doc["employee_id"] = me["_id"]
+    else:
+        if doc.get("employee_id") is not None:
+            doc["employee_id"] = ObjectId(str(doc["employee_id"]))
     # Convert date-only fields to datetimes for Mongo
     for k in ("start_date", "end_date"):
         v = doc.get(k)
@@ -87,23 +107,26 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
     return {
         "id": str(res.inserted_id),
         **payload.model_dump(),
-        "status": "pending",
+        "status": "requested",
         "created_at": now,
     }
 
 
 @router.patch("/{leave_id}", response_model=LeaveOut)
 async def decide_leave(
-    payload: LeaveDecisionIn,
+    payload: LeaveStatusIn,
     leave_id: str = Path(...),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
-    status_out = "approved" if payload.action == "approve" else "rejected"
+    # Guard
+    if str(current_user.get("role")) not in {"admin", "manager", "hr", "supervisor"}:
+        return HTTPException(status_code=403, detail="Insufficient permissions")
+    status_out = payload.status
     now = datetime.utcnow()
     await db["leaves"].update_one(
         {"_id": ObjectId(leave_id), "company_id": ObjectId(current_user["company_id"])},
-        {"$set": {"status": status_out, "decided_on": now, "updated_at": now}},
+        {"$set": {"status": status_out, "decided_on": now, "updated_at": now, "comment": payload.comment}},
     )
     doc = await db["leaves"].find_one({"_id": ObjectId(leave_id)})
     if not doc:

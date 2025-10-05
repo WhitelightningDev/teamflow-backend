@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from jose import jwt
+from jose.exceptions import JWTError, ExpiredSignatureError
 from fastapi import Header, HTTPException, status
 from bson import ObjectId
 
@@ -40,7 +41,9 @@ def create_jwt(payload: dict, expires_delta: Optional[timedelta] = None) -> str:
 def decode_jwt(token: str) -> dict:
     try:
         return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.PyJWTError as exc:
+    except ExpiredSignatureError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired") from exc
+    except JWTError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 
@@ -67,17 +70,4 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     }
 
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
-def verify_password(password: str, hashed: str) -> bool:
-    return hash_password(password) == hashed
-
-
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    # Placeholder implementation: returns a random token string
-    _ = expires_delta or timedelta(minutes=15)
-    token = secrets.token_urlsafe(32)
-    # In a real setup, you would sign a JWT here with SECRET_KEY
-    return f"tok_{token}"
+## duplicate legacy helpers removed
