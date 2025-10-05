@@ -1,6 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import settings
 from app.api.v1.users import router as users_router
 from app.api.v1.teams import router as teams_router
 from app.api.v1.auth import router as auth_router
@@ -19,14 +20,22 @@ from app.db.mongo_indexes import ensure_indexes
 app = FastAPI(title="TeamsFlow Backend")
 
 # CORS for local frontend dev
+# Build CORS allowlist from local dev + configured origins
+_base_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://0.0.0.0:5173",
+    "https://teamflow-pearl.vercel.app/"
+}
+if settings.FRONTEND_BASE_URL:
+    _base_origins.add(settings.FRONTEND_BASE_URL)
+for o in settings.ALLOWED_ORIGINS:
+    _base_origins.add(o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://0.0.0.0:5173",
-    ],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=sorted({o for o in _base_origins if o}),
+    allow_origin_regex=r"^http(s)?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
