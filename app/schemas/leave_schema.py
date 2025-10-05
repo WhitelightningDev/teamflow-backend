@@ -20,6 +20,7 @@ class LeaveOut(BaseModel):
     start_date: date
     end_date: date
     reason: Optional[str] = None
+    comment: Optional[str] = None
     status: Literal["requested", "approved", "rejected", "cancelled"]
     created_at: datetime
 

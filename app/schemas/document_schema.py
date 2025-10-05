@@ -11,6 +11,9 @@ class DocumentOut(BaseModel):
     size: int
     uploaded_by: int | str | None
     uploaded_at: datetime
+    employee_id: str | None = None
+    leave_id: str | None = None
+    category: str | None = None
 
 
 class DocumentListOut(BaseModel):
