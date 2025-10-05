@@ -23,9 +23,8 @@ COPY . .
 # Expose default port (Render sets $PORT; we still expose 8000 for local)
 EXPOSE 8000
 
-# Healthcheck hits FastAPI health endpoint without extra deps
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD python -c "import os,urllib.request,sys; port=os.environ.get('PORT','8000');
-print(urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=2).read()); sys.exit(0)" || exit 1
+# Healthcheck hits FastAPI health endpoint without extra deps (single-line to satisfy Docker parser)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD python -c "import os,urllib.request; port=os.environ.get('PORT','8000'); urllib.request.urlopen('http://127.0.0.1:'+port+'/health', timeout=2)"
 
 # Default to 8000 locally; Render will inject $PORT at runtime
 ENV PORT=8000
