@@ -25,16 +25,18 @@ _base_origins = {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://0.0.0.0:5173",
-    "https://teamflow-pearl.vercel.app/"
+    "https://teamflow-pearl.vercel.app/",
 }
 if settings.FRONTEND_BASE_URL:
     _base_origins.add(settings.FRONTEND_BASE_URL)
 for o in settings.ALLOWED_ORIGINS:
     _base_origins.add(o)
+# Normalize by stripping trailing slashes to match Origin header format
+_allowed_origins = sorted({o.rstrip('/') for o in _base_origins if o})
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted({o for o in _base_origins if o}),
+    allow_origins=_allowed_origins,
     allow_origin_regex=r"^http(s)?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
