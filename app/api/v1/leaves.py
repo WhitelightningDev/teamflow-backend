@@ -98,6 +98,9 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
     else:
         if doc.get("employee_id") is not None:
             doc["employee_id"] = ObjectId(str(doc["employee_id"]))
+        else:
+            # For non-employee roles, an explicit employee_id must be provided
+            raise HTTPException(status_code=400, detail="employee_id is required")
     # Convert date-only fields to datetimes for Mongo
     for k in ("start_date", "end_date"):
         v = doc.get(k)
@@ -106,7 +109,11 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
     res = await db["leaves"].insert_one(doc)
     return {
         "id": str(res.inserted_id),
-        **payload.model_dump(),
+        "employee_id": str(doc.get("employee_id")),
+        "leave_type": doc.get("leave_type", "annual"),
+        "start_date": doc.get("start_date"),
+        "end_date": doc.get("end_date"),
+        "reason": doc.get("reason"),
         "status": "requested",
         "created_at": now,
     }
@@ -126,7 +133,7 @@ async def decide_leave(
     now = datetime.utcnow()
     await db["leaves"].update_one(
         {"_id": ObjectId(leave_id), "company_id": ObjectId(current_user["company_id"])},
-        {"$set": {"status": status_out, "decided_on": now, "updated_at": now, "comment": payload.comment}},
+        {"$set": {"status": status_out, "decided_on": now, "updated_at": now, "comment": payload.comment, "approver_id": ObjectId(current_user["id"]) }},
     )
     doc = await db["leaves"].find_one({"_id": ObjectId(leave_id)})
     if not doc:
