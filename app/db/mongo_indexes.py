@@ -42,3 +42,12 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     # Unique token for invites
     await invites.create_index([("token", 1)], unique=True, name="uniq_invite_token")
     await invites.create_index([("expires_at", 1)], name="idx_invite_expires_at")
+
+    attendance = db["attendance"]
+    await attendance.create_index([("company_id", 1), ("employee_id", 1), ("date", 1)], name="idx_att_company_emp_date")
+
+    announcements = db["announcements"]
+    await announcements.create_index([("company_id", 1), ("created_at", -1)], name="idx_ann_company_created")
+
+    notifications = db["notifications"]
+    await notifications.create_index([("user_id", 1), ("read", 1), ("created_at", -1)], name="idx_notif_user_read_created")

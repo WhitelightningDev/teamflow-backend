@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.db.mongo import get_mongo_db
 from app.core.security import get_current_user
+from app.core.rbac import is_admin_like
 from app.schemas.leave_schema import (
     LeaveIn,
     LeaveOut,
@@ -48,6 +49,7 @@ async def list_leaves(
                 "start_date": doc.get("start_date"),
                 "end_date": doc.get("end_date"),
                 "reason": doc.get("reason"),
+                "comment": doc.get("comment"),
                 "status": doc.get("status", "requested"),
                 "created_at": doc.get("created_at", datetime.utcnow()),
             }
@@ -71,6 +73,7 @@ async def get_leave(
         "start_date": doc.get("start_date"),
         "end_date": doc.get("end_date"),
         "reason": doc.get("reason"),
+        "comment": doc.get("comment"),
         "status": doc.get("status", "requested"),
         "created_at": doc.get("created_at", datetime.utcnow()),
     }
@@ -107,6 +110,18 @@ async def create_leave(payload: LeaveIn, db: AsyncIOMotorDatabase = Depends(get_
         if isinstance(v, _date) and not isinstance(v, datetime):
             doc[k] = datetime(v.year, v.month, v.day)
     res = await db["leaves"].insert_one(doc)
+    # Notify approvers
+    roles = ["admin", "manager", "hr"]
+    cursor = db["users"].find({"company_id": ObjectId(current_user["company_id"]), "role": {"$in": roles}})
+    now = datetime.utcnow()
+    async for u in cursor:
+        await db["notifications"].insert_one({
+            "user_id": u["_id"],
+            "type": "leave_requested",
+            "payload": {"leave_id": str(res.inserted_id)},
+            "read": False,
+            "created_at": now,
+        })
     return {
         "id": str(res.inserted_id),
         "employee_id": str(doc.get("employee_id")),
@@ -138,6 +153,16 @@ async def decide_leave(
     doc = await db["leaves"].find_one({"_id": ObjectId(leave_id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Leave not found")
+    # Notify owner when status changes
+    emp = await db["employees"].find_one({"_id": doc.get("employee_id")})
+    if emp and emp.get("user_id"):
+        await db["notifications"].insert_one({
+            "user_id": emp["user_id"],
+            "type": "leave_status",
+            "payload": {"leave_id": leave_id, "status": status_out, "comment": payload.comment},
+            "read": False,
+            "created_at": now,
+        })
     return {
         "id": str(doc["_id"]),
         "employee_id": str(doc.get("employee_id")),
@@ -145,6 +170,7 @@ async def decide_leave(
         "start_date": doc.get("start_date"),
         "end_date": doc.get("end_date"),
         "reason": doc.get("reason"),
+        "comment": doc.get("comment"),
         "status": doc.get("status", status_out),
         "created_at": doc.get("created_at", now),
     }
