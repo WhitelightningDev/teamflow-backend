@@ -10,6 +10,9 @@ class Settings:
         self.SECRET_KEY: str = os.getenv("SECRET_KEY", "changeme")
         self.MONGODB_URI: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
         self.MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "teamflow")
+        # Frontend base URL for building links in emails (invite acceptance, etc.)
+        # Default to local Vite dev server
+        self.FRONTEND_BASE_URL: str = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
 
 
 settings = Settings()

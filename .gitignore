@@ -1,8 +1,8 @@
 # Python bytecode and cache
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
-dns
 .pycache/
 
 # Distribution / packaging
@@ -15,8 +15,10 @@ wheels/
 MANIFEST
 pip-wheel-metadata/
 
-# Virtual environments
+# Virtual environments / env files
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 ENV/
