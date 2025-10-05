@@ -7,6 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.db.mongo import get_mongo_db
 from app.core.security import get_current_user
+from app.core.config import settings
 from app.schemas.employee_schema import (
     EmployeeIn,
     EmployeeOut,
@@ -183,7 +184,8 @@ async def invite_employee(
     }
     await db["invites"].insert_one(invite)
     # Send email (placeholder)
-    url = f"https://app/accept-invite?token={token}"
+    base = settings.FRONTEND_BASE_URL.rstrip('/')
+    url = f"{base}/accept-invite?token={token}"
     # Try to fetch company name for nicer email
     company = await db["companies"].find_one({"_id": ObjectId(current_user["company_id"])})
     company_name = company.get("name", "TeamFlow") if company else "TeamFlow"
