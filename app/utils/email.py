@@ -1,6 +1,10 @@
 import os
 import smtplib
 import ssl
+import logging
+import socket
+from smtplib import SMTPServerDisconnected, SMTPAuthenticationError
+import certifi
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict
@@ -39,6 +43,7 @@ def send_email_smtp(message: EmailMessage) -> None:
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER", "")
     password = os.getenv("SMTP_PASSWORD", "")
+    timeout = float(os.getenv("SMTP_TIMEOUT", "10"))
     use_ssl = os.getenv("SMTP_USE_SSL", "false").lower() in {"1", "true", "yes"}
     use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
 
@@ -48,22 +53,38 @@ def send_email_smtp(message: EmailMessage) -> None:
     # Gmail app passwords are often shown with spaces; strip them
     password = password.replace(" ", "")
 
-    context = ssl.create_default_context()
+    # Auto-correct common port/protocol mismatches
+    if port == 465 and not use_ssl:
+        logging.getLogger("uvicorn.error").warning("SMTP configured with port 465; enabling SSL and disabling STARTTLS for compatibility")
+        use_ssl = True
+        use_tls = False
+    if port == 587 and use_ssl:
+        logging.getLogger("uvicorn.error").warning("SMTP configured with port 587 and SSL; switching to STARTTLS for compatibility")
+        use_ssl = False
+        use_tls = True
 
-    if use_ssl:
-        with smtplib.SMTP_SSL(host, port, context=context) as server:
+    # Use certifi CA bundle to avoid missing system CAs in slim containers
+    context = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=timeout, context=context) as server:
+                server.login(user, password)
+                server.send_message(message)
+            return
+
+        with smtplib.SMTP(host, port, timeout=timeout) as server:
+            server.ehlo()
+            if use_tls:
+                server.starttls(context=context)
+                # Some SMTP servers require EHLO again after STARTTLS
+                server.ehlo()
             server.login(user, password)
             server.send_message(message)
-        return
-
-    with smtplib.SMTP(host, port) as server:
-        server.ehlo()
-        if use_tls:
-            server.starttls(context=context)
-            # Some SMTP servers require EHLO again after STARTTLS
-            server.ehlo()
-        server.login(user, password)
-        server.send_message(message)
+    except SMTPAuthenticationError as exc:
+        raise RuntimeError(f"SMTP auth failed ({exc.smtp_code}): {exc.smtp_error.decode() if isinstance(exc.smtp_error, bytes) else exc.smtp_error}") from exc
+    except (SMTPServerDisconnected, ssl.SSLError, socket.timeout) as exc:
+        raise RuntimeError(f"SMTP connection failed: {type(exc).__name__}: {exc}") from exc
 
 
 def send_invite_email(*, to: str, invite_url: str, company_name: str = "TeamFlow", employee_first_name: str | None = None) -> None:
