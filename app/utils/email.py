@@ -1,5 +1,6 @@
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict
@@ -38,12 +39,29 @@ def send_email_smtp(message: EmailMessage) -> None:
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER", "")
     password = os.getenv("SMTP_PASSWORD", "")
+    use_ssl = os.getenv("SMTP_USE_SSL", "false").lower() in {"1", "true", "yes"}
+    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes"}
+
+    if not user or not password:
+        raise RuntimeError("SMTP credentials missing: set SMTP_USER and SMTP_PASSWORD env vars")
+
     # Gmail app passwords are often shown with spaces; strip them
     password = password.replace(" ", "")
 
+    context = ssl.create_default_context()
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, context=context) as server:
+            server.login(user, password)
+            server.send_message(message)
+        return
+
     with smtplib.SMTP(host, port) as server:
         server.ehlo()
-        server.starttls()
+        if use_tls:
+            server.starttls(context=context)
+            # Some SMTP servers require EHLO again after STARTTLS
+            server.ehlo()
         server.login(user, password)
         server.send_message(message)
 
