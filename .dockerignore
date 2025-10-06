@@ -12,11 +12,11 @@ env/
 build/
 dist/
 node_modules/
-.env
-.env.*
+# Keep .env files in the image so runtime config can be loaded by python-dotenv.
+# Remove these lines only if you prefer providing env via the platform.
+# (Be mindful of committing secrets.)
 .idea/
 .vscode/
 coverage/
 *.egg-info/
 pip-wheel-metadata/
-

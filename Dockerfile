@@ -10,7 +10,8 @@ WORKDIR /app
 
 # System deps (lightweight; wheels cover most packages, but keep gcc for safety)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first for better layer caching
