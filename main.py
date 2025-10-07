@@ -11,6 +11,7 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.lookups import router as lookups_router
 from app.api.v1.attendance import router as attendance_router
+from app.api.v1.timesheets import router as timesheets_router
 from app.api.v1.announcements import router as announcements_router
 from app.api.v1.notifications import router as notifications_router
 from app.api.v1.me import router as me_router
@@ -64,6 +65,7 @@ app.include_router(documents_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(lookups_router, prefix="/api/v1")
 app.include_router(attendance_router, prefix="/api/v1")
+app.include_router(timesheets_router, prefix="/api/v1")
 app.include_router(announcements_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(me_router, prefix="/api/v1")
