@@ -233,12 +233,37 @@ async def assign_job(job_id: str = Path(...), payload: dict = None, db: AsyncIOM
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     now = datetime.utcnow()
-    await db["job_assignments"].update_one(
+    result = await db["job_assignments"].update_one(
         {"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid},
         {"$set": {"updated_at": now}, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
     a = await db["job_assignments"].find_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+    # Log assignment activity only on new upsert (first-time assignment)
+    try:
+        if getattr(result, "upserted_id", None) is not None:
+            await db["assignment_activity"].insert_one({
+                "company_id": company_id,
+                "employee_id": emp_oid,
+                "job_id": job_oid,
+                "job_name": job.get("name"),
+                "action": "assigned",
+                "actor_user_id": ObjectId(current_user["id"]),
+                "created_at": now,
+            })
+            # Notify the employee about the new assignment (if user linked)
+            emp_doc = await db["employees"].find_one({"_id": emp_oid, "company_id": company_id})
+            if emp_doc and emp_doc.get("user_id"):
+                await db["notifications"].insert_one({
+                    "user_id": emp_doc["user_id"],
+                    "type": "job_assignment",
+                    "payload": {"action": "assigned", "job_id": str(job_oid), "job_name": job.get("name")},
+                    "read": False,
+                    "created_at": now,
+                })
+    except Exception:
+        # Activity logging is non-fatal
+        pass
     return {"id": str(a["_id"]), "job_id": str(job_oid), "employee_id": str(emp_oid)}
 
 
@@ -249,8 +274,67 @@ async def unassign_job(job_id: str = Path(...), employee_id: str = Path(...), db
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     emp_oid = ObjectId(employee_id)
-    await db["job_assignments"].delete_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+    res = await db["job_assignments"].delete_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+    # Log unassignment activity only if something was deleted
+    if getattr(res, "deleted_count", 0) > 0:
+        try:
+            job = await db["jobs"].find_one({"_id": job_oid, "company_id": company_id})
+            await db["assignment_activity"].insert_one({
+                "company_id": company_id,
+                "employee_id": emp_oid,
+                "job_id": job_oid,
+                "job_name": (job or {}).get("name"),
+                "action": "unassigned",
+                "actor_user_id": ObjectId(current_user["id"]),
+                "created_at": datetime.utcnow(),
+            })
+            # Notify the employee of unassignment (if user linked)
+            emp_doc = await db["employees"].find_one({"_id": emp_oid, "company_id": company_id})
+            if emp_doc and emp_doc.get("user_id"):
+                await db["notifications"].insert_one({
+                    "user_id": emp_doc["user_id"],
+                    "type": "job_assignment",
+                    "payload": {"action": "unassigned", "job_id": str(job_oid), "job_name": (job or {}).get("name")},
+                    "read": False,
+                    "created_at": datetime.utcnow(),
+                })
+        except Exception:
+            pass
     return {"status": "unassigned", "job_id": job_id, "employee_id": employee_id}
+
+
+@router.get("/assignments/activity")
+async def my_assignment_activity(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    employee_id: Optional[str] = Query(None, description="Admin-only: filter by employee_id"),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    current_user=Depends(get_current_user),
+):
+    """List assignment activity for the current employee; admin can filter by employee_id."""
+    company_id = ObjectId(current_user["company_id"])
+    # Default to current user's employee id
+    me_emp_id = await _get_current_employee_id(db, current_user)
+    target_emp_oid = me_emp_id
+    # Allow admins to query for another employee
+    if employee_id and is_admin_like(str(current_user.get("role", ""))):
+        try:
+            target_emp_oid = ObjectId(employee_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid employee_id")
+    q = {"company_id": company_id, "employee_id": target_emp_oid}
+    total = await db["assignment_activity"].count_documents(q)
+    cursor = db["assignment_activity"].find(q).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
+    items: list[dict] = []
+    async for ev in cursor:
+        items.append({
+            "id": str(ev["_id"]),
+            "job_id": str(ev.get("job_id")) if ev.get("job_id") else None,
+            "job_name": ev.get("job_name"),
+            "action": ev.get("action"),
+            "created_at": ev.get("created_at"),
+        })
+    return {"items": items, "total": total, "page": page, "limit": limit}
 
 
 # ---------------------- Time entries ----------------------
