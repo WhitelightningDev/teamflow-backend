@@ -51,3 +51,16 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
 
     notifications = db["notifications"]
     await notifications.create_index([("user_id", 1), ("read", 1), ("created_at", -1)], name="idx_notif_user_read_created")
+
+    # Jobs and time tracking
+    jobs = db["jobs"]
+    await jobs.create_index([("company_id", 1), ("name", 1)], unique=True, name="uniq_company_job_name")
+    await jobs.create_index([("company_id", 1), ("active", 1)], name="idx_jobs_company_active")
+
+    job_rates = db["job_rates"]
+    await job_rates.create_index([("company_id", 1), ("job_id", 1), ("employee_id", 1)], unique=True, name="uniq_company_job_employee_rate")
+
+    time_entries = db["time_entries"]
+    await time_entries.create_index([("company_id", 1), ("employee_id", 1), ("date", 1)], name="idx_te_company_emp_date")
+    await time_entries.create_index([("company_id", 1), ("job_id", 1), ("date", 1)], name="idx_te_company_job_date")
+    await time_entries.create_index([("company_id", 1), ("employee_id", 1), ("is_active", 1)], name="idx_te_active_by_emp")
