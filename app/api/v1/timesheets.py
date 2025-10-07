@@ -49,6 +49,9 @@ async def _get_effective_rate(db: AsyncIOMotorDatabase, company_id: ObjectId, jo
 
 @router.post("/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(payload: JobIn, db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    # Admin/manager/HR only
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     doc = {
         "company_id": ObjectId(current_user["company_id"]),
         "name": payload.name,
@@ -101,6 +104,8 @@ async def update_job(
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     update: dict = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     if "default_rate" in update and update["default_rate"] is not None:
@@ -131,6 +136,8 @@ async def set_job_rate(
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     emp_oid = ObjectId(payload.employee_id)
@@ -159,6 +166,8 @@ async def set_job_rate(
 
 @router.get("/jobs/{job_id}/rates", response_model=list[JobRateOut])
 async def list_job_rates(job_id: str = Path(...), db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     cursor = db["job_rates"].find({"company_id": company_id, "job_id": job_oid}).sort("updated_at", -1)
@@ -515,4 +524,3 @@ async def billing_report(
             "by_employee": data["by_employee"],
         })
     return {"month": month, "jobs": out}
-
