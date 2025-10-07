@@ -44,6 +44,41 @@ async def _get_effective_rate(db: AsyncIOMotorDatabase, company_id: ObjectId, jo
     return float(job.get("default_rate", 0.0)) if job else 0.0
 
 
+async def _backfill_assignment_activity(db: AsyncIOMotorDatabase, company_id: ObjectId, employee_id: ObjectId) -> None:
+    """Ensure there is at least one 'assigned' activity for each existing assignment.
+    Non-fatal on errors; designed to run quickly per-employee.
+    """
+    try:
+        cursor = db["job_assignments"].find({"company_id": company_id, "employee_id": employee_id})
+        async for a in cursor:
+            job_id = a.get("job_id")
+            if not isinstance(job_id, ObjectId):
+                continue
+            exists = await db["assignment_activity"].find_one({
+                "company_id": company_id,
+                "employee_id": employee_id,
+                "job_id": job_id,
+                "action": "assigned",
+            })
+            if exists:
+                continue
+            # Build synthetic assigned event from assignment timestamps
+            created = a.get("created_at") or a.get("updated_at") or datetime.utcnow()
+            job = await db["jobs"].find_one({"_id": job_id, "company_id": company_id})
+            await db["assignment_activity"].insert_one({
+                "company_id": company_id,
+                "employee_id": employee_id,
+                "job_id": job_id,
+                "job_name": (job or {}).get("name"),
+                "action": "assigned",
+                "actor_user_id": None,
+                "created_at": created,
+            })
+    except Exception:
+        # Best-effort backfill; ignore failures
+        pass
+
+
 # ---------------------- Jobs ----------------------
 
 
@@ -322,6 +357,8 @@ async def my_assignment_activity(
             target_emp_oid = ObjectId(employee_id)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid employee_id")
+    # Best-effort backfill to surface existing assignments as activity
+    await _backfill_assignment_activity(db, company_id, target_emp_oid)
     q = {"company_id": company_id, "employee_id": target_emp_oid}
     total = await db["assignment_activity"].count_documents(q)
     cursor = db["assignment_activity"].find(q).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
