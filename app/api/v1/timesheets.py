@@ -270,7 +270,7 @@ async def assign_job(job_id: str = Path(...), payload: dict = None, db: AsyncIOM
     now = datetime.utcnow()
     result = await db["job_assignments"].update_one(
         {"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid},
-        {"$set": {"updated_at": now}, "$setOnInsert": {"created_at": now}},
+        {"$set": {"updated_at": now}, "$setOnInsert": {"created_at": now, "state": "assigned", "state_changed_at": now}},
         upsert=True,
     )
     a = await db["job_assignments"].find_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
@@ -309,6 +309,14 @@ async def unassign_job(job_id: str = Path(...), employee_id: str = Path(...), db
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     emp_oid = ObjectId(employee_id)
+    # Mark state canceled before removal for audit trail
+    try:
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid},
+            {"$set": {"state": "canceled", "state_changed_at": datetime.utcnow()}},
+        )
+    except Exception:
+        pass
     res = await db["job_assignments"].delete_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
     # Log unassignment activity only if something was deleted
     if getattr(res, "deleted_count", 0) > 0:
@@ -319,7 +327,7 @@ async def unassign_job(job_id: str = Path(...), employee_id: str = Path(...), db
                 "employee_id": emp_oid,
                 "job_id": job_oid,
                 "job_name": (job or {}).get("name"),
-                "action": "unassigned",
+                "action": "canceled",
                 "actor_user_id": ObjectId(current_user["id"]),
                 "created_at": datetime.utcnow(),
             })
@@ -374,6 +382,36 @@ async def my_assignment_activity(
     return {"items": items, "total": total, "page": page, "limit": limit}
 
 
+@router.get("/my/assignments")
+async def my_assignments(
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    current_user=Depends(get_current_user),
+):
+    """List current user's job assignments with state and job info."""
+    company_id = ObjectId(current_user["company_id"])
+    employee_id = await _get_current_employee_id(db, current_user)
+    # Backfill default state for missing
+    try:
+        await db["job_assignments"].update_many(
+            {"company_id": company_id, "employee_id": employee_id, "state": {"$exists": False}},
+            {"$set": {"state": "assigned", "state_changed_at": datetime.utcnow()}},
+        )
+    except Exception:
+        pass
+    cursor = db["job_assignments"].find({"company_id": company_id, "employee_id": employee_id})
+    items: list[dict] = []
+    async for a in cursor:
+        job = await db["jobs"].find_one({"_id": a.get("job_id"), "company_id": company_id})
+        items.append({
+            "job_id": str(a.get("job_id")),
+            "job_name": (job or {}).get("name", ""),
+            "client_name": (job or {}).get("client_name"),
+            "state": a.get("state", "assigned"),
+            "state_changed_at": a.get("state_changed_at"),
+        })
+    return {"items": items}
+
+
 # ---------------------- Time entries ----------------------
 
 
@@ -418,6 +456,24 @@ async def clock_in(payload: ClockInPayload, db: AsyncIOMotorDatabase = Depends(g
     }
     res = await db["time_entries"].insert_one(doc)
     rate = await _get_effective_rate(db, company_id, job_oid, employee_id)
+    # Update assignment state to in_progress and log activity
+    try:
+        now2 = datetime.utcnow()
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": job_oid, "employee_id": employee_id},
+            {"$set": {"state": "in_progress", "state_changed_at": now2, "updated_at": now2}},
+        )
+        await db["assignment_activity"].insert_one({
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "job_id": job_oid,
+            "job_name": job.get("name"),
+            "action": "started",
+            "actor_user_id": ObjectId(current_user["id"]),
+            "created_at": now2,
+        })
+    except Exception:
+        pass
     return TimeEntryOut(
         id=str(res.inserted_id),
         job_id=str(job_oid),
@@ -509,6 +565,25 @@ async def clock_out(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_us
     ent = await db["time_entries"].find_one({"_id": ent["_id"]})
     rate = await _get_effective_rate(db, company_id, ent["job_id"], employee_id)
     amount = round((float(duration_minutes) / 60.0) * rate, 2) if duration_minutes else 0.0
+    # Update assignment state to done and log activity
+    try:
+        now2 = datetime.utcnow()
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": ent["job_id"], "employee_id": employee_id},
+            {"$set": {"state": "done", "state_changed_at": now2, "updated_at": now2}},
+        )
+        job = await db["jobs"].find_one({"_id": ent["job_id"], "company_id": company_id})
+        await db["assignment_activity"].insert_one({
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "job_id": ent["job_id"],
+            "job_name": (job or {}).get("name"),
+            "action": "done",
+            "actor_user_id": ObjectId(current_user["id"]),
+            "created_at": now2,
+        })
+    except Exception:
+        pass
     return TimeEntryOut(
         id=str(ent["_id"]),
         job_id=str(ent["job_id"]),
@@ -651,7 +726,17 @@ async def my_time_entries(
     items = []
     async for doc in cursor:
         rate = await _get_effective_rate(db, company_id, doc["job_id"], employee_id)
-        dur = int(doc.get("duration_minutes") or (int(((doc.get("end_ts") or datetime.utcnow()) - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0))) if doc.get("is_active") else 0)
+        # Prefer stored duration; compute from timestamps if missing (for both active and completed entries)
+        dur_val = doc.get("duration_minutes")
+        if isinstance(dur_val, int) and dur_val > 0:
+            dur = int(dur_val)
+        else:
+            if doc.get("end_ts"):
+                dur = max(0, int(((doc.get("end_ts") - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0))))
+            elif doc.get("is_active"):
+                dur = max(0, int(((datetime.utcnow() - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0))))
+            else:
+                dur = 0
         amount = round((float(dur) / 60.0) * rate, 2) if dur else 0.0
         items.append({
             "id": str(doc["_id"]),
