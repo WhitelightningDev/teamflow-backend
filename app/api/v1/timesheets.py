@@ -49,6 +49,9 @@ async def _get_effective_rate(db: AsyncIOMotorDatabase, company_id: ObjectId, jo
 
 @router.post("/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 async def create_job(payload: JobIn, db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    # Admin/manager/HR only
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     doc = {
         "company_id": ObjectId(current_user["company_id"]),
         "name": payload.name,
@@ -75,12 +78,29 @@ async def create_job(payload: JobIn, db: AsyncIOMotorDatabase = Depends(get_mong
 @router.get("/jobs", response_model=list[JobOut])
 async def list_jobs(
     active: Optional[bool] = Query(None),
+    assigned_to_me: Optional[bool] = Query(False, description="If true, only return jobs assigned to the current employee"),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
     q = {"company_id": ObjectId(current_user["company_id"])}
     if active is not None:
         q["active"] = bool(active)
+    # If non-admin asks for assigned_to_me, filter to assigned job_ids for this employee
+    if assigned_to_me and not is_admin_like(str(current_user.get("role", ""))):
+        employee_id = await _get_current_employee_id(db, current_user)
+        assigned_job_ids: list[ObjectId] = []
+        async for a in db["job_assignments"].find({
+            "company_id": ObjectId(current_user["company_id"]),
+            "employee_id": employee_id,
+        }, {"job_id": 1}):
+            jid = a.get("job_id")
+            if isinstance(jid, ObjectId):
+                assigned_job_ids.append(jid)
+        if assigned_job_ids:
+            q["_id"] = {"$in": assigned_job_ids}
+        else:
+            # No assignments: return empty list explicitly
+            return []
     cursor = db["jobs"].find(q).sort("created_at", -1)
     out: list[JobOut] = []
     async for j in cursor:
@@ -101,6 +121,8 @@ async def update_job(
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     update: dict = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     if "default_rate" in update and update["default_rate"] is not None:
@@ -131,6 +153,8 @@ async def set_job_rate(
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     emp_oid = ObjectId(payload.employee_id)
@@ -159,6 +183,8 @@ async def set_job_rate(
 
 @router.get("/jobs/{job_id}/rates", response_model=list[JobRateOut])
 async def list_job_rates(job_id: str = Path(...), db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
     company_id = ObjectId(current_user["company_id"])
     job_oid = ObjectId(job_id)
     cursor = db["job_rates"].find({"company_id": company_id, "job_id": job_oid}).sort("updated_at", -1)
@@ -166,6 +192,65 @@ async def list_job_rates(job_id: str = Path(...), db: AsyncIOMotorDatabase = Dep
     async for r in cursor:
         out.append(JobRateOut(id=str(r["_id"]), job_id=str(job_oid), employee_id=str(r["employee_id"]), rate=float(r.get("rate", 0.0))))
     return out
+
+
+# ---------------------- Job assignments ----------------------
+
+
+@router.get("/jobs/{job_id}/assignments")
+async def list_job_assignments(job_id: str = Path(...), db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    company_id = ObjectId(current_user["company_id"])
+    job_oid = ObjectId(job_id)
+    cursor = db["job_assignments"].find({"company_id": company_id, "job_id": job_oid}).sort("created_at", -1)
+    items: list[dict] = []
+    async for a in cursor:
+        items.append({"id": str(a["_id"]), "job_id": str(job_oid), "employee_id": str(a.get("employee_id"))})
+    return items
+
+
+@router.post("/jobs/{job_id}/assign")
+async def assign_job(job_id: str = Path(...), payload: dict = None, db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    company_id = ObjectId(current_user["company_id"])
+    job_oid = ObjectId(job_id)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Missing body")
+    emp_oid: ObjectId | None = None
+    if payload.get("employee_id"):
+        emp_oid = ObjectId(payload["employee_id"])
+    elif payload.get("employee_email"):
+        emp_doc = await db["employees"].find_one({"company_id": company_id, "email": payload["employee_email"]})
+        if not emp_doc:
+            raise HTTPException(status_code=404, detail="Employee with this email not found")
+        emp_oid = emp_doc["_id"]
+    else:
+        raise HTTPException(status_code=400, detail="employee_id or employee_email is required")
+    # Ensure job exists
+    job = await db["jobs"].find_one({"_id": job_oid, "company_id": company_id})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    now = datetime.utcnow()
+    await db["job_assignments"].update_one(
+        {"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid},
+        {"$set": {"updated_at": now}, "$setOnInsert": {"created_at": now}},
+        upsert=True,
+    )
+    a = await db["job_assignments"].find_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+    return {"id": str(a["_id"]), "job_id": str(job_oid), "employee_id": str(emp_oid)}
+
+
+@router.delete("/jobs/{job_id}/assign/{employee_id}")
+async def unassign_job(job_id: str = Path(...), employee_id: str = Path(...), db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    company_id = ObjectId(current_user["company_id"])
+    job_oid = ObjectId(job_id)
+    emp_oid = ObjectId(employee_id)
+    await db["job_assignments"].delete_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+    return {"status": "unassigned", "job_id": job_id, "employee_id": employee_id}
 
 
 # ---------------------- Time entries ----------------------
@@ -188,6 +273,13 @@ async def clock_in(payload: ClockInPayload, db: AsyncIOMotorDatabase = Depends(g
     if active:
         raise HTTPException(status_code=400, detail="You already have an active time entry")
     now = datetime.utcnow()
+    # If assignments exist for this job, enforce assignment for non-admin users
+    if not is_admin_like(str(current_user.get("role", ""))):
+        has_assign = await db["job_assignments"].count_documents({"company_id": company_id, "job_id": job_oid})
+        if has_assign:
+            mine = await db["job_assignments"].count_documents({"company_id": company_id, "job_id": job_oid, "employee_id": employee_id})
+            if mine == 0:
+                raise HTTPException(status_code=403, detail="You are not assigned to this job")
     doc = {
         "company_id": company_id,
         "employee_id": employee_id,
@@ -515,4 +607,3 @@ async def billing_report(
             "by_employee": data["by_employee"],
         })
     return {"month": month, "jobs": out}
-
