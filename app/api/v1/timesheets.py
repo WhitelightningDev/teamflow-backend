@@ -412,6 +412,49 @@ async def my_assignments(
     return {"items": items}
 
 
+@router.get("/assignments")
+async def list_company_assignments(
+    state: Optional[str] = Query(None, description="Filter by state: assigned|in_progress|done|canceled"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    current_user=Depends(get_current_user),
+):
+    """Admin: list all assignments with current state, job and employee info."""
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    company_id = ObjectId(current_user["company_id"])
+    q: dict = {"company_id": company_id}
+    if state:
+        if state not in {"assigned", "in_progress", "done", "canceled"}:
+            raise HTTPException(status_code=400, detail="Invalid state")
+        q["state"] = state
+    total = await db["job_assignments"].count_documents(q)
+    cursor = db["job_assignments"].find(q).skip((page - 1) * limit).limit(limit).sort("state_changed_at", -1)
+    items: list[dict] = []
+    async for a in cursor:
+        job = await db["jobs"].find_one({"_id": a.get("job_id"), "company_id": company_id})
+        emp = await db["employees"].find_one({"_id": a.get("employee_id"), "company_id": company_id})
+        # latest activity action
+        act = await db["assignment_activity"].find_one({
+            "company_id": company_id,
+            "employee_id": a.get("employee_id"),
+            "job_id": a.get("job_id"),
+        }, sort=[("created_at", -1)])
+        items.append({
+            "job_id": str(a.get("job_id")),
+            "job_name": (job or {}).get("name", ""),
+            "client_name": (job or {}).get("client_name"),
+            "employee_id": str(a.get("employee_id")),
+            "employee_name": (f"{(emp or {}).get('first_name','')} {(emp or {}).get('last_name','')}").strip() or (emp or {}).get("email"),
+            "state": a.get("state", "assigned"),
+            "state_changed_at": a.get("state_changed_at"),
+            "last_activity": (act or {}).get("action"),
+            "last_activity_at": (act or {}).get("created_at"),
+        })
+    return {"items": items, "total": total, "page": page, "limit": limit}
+
+
 # ---------------------- Time entries ----------------------
 
 
