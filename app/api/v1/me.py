@@ -18,7 +18,8 @@ async def my_profile(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_u
         "company_id": ObjectId(current_user["company_id"]),
         "user_id": ObjectId(current_user["id"]),
     })
-    return {"user": current_user, "employee": {"id": str(emp["_id"]) if emp else None, **({k: emp.get(k) for k in ("first_name","last_name","email","phone","address","emergency_contact")} if emp else {})}}
+    fields = ("first_name","last_name","email","phone","address","emergency_contact","province")
+    return {"user": current_user, "employee": {"id": str(emp["_id"]) if emp else None, **({k: emp.get(k) for k in fields} if emp else {})}}
 
 
 @router.patch("/profile")
@@ -29,7 +30,8 @@ async def update_my_profile(payload: dict, db: AsyncIOMotorDatabase = Depends(ge
     })
     if not emp:
         return {"status": "no_employee"}
-    update = {k: v for k, v in payload.items() if k in {"phone","address","emergency_contact"}}
+    allowed = {"phone","address","emergency_contact","province"}
+    update = {k: v for k, v in payload.items() if k in allowed}
     update["updated_at"] = datetime.utcnow()
     await db["employees"].update_one({"_id": emp["_id"]}, {"$set": update})
     return {"status": "ok"}
@@ -60,4 +62,3 @@ async def my_leave_balances(db: AsyncIOMotorDatabase = Depends(get_mongo_db), cu
         balances[lt] = balances.get(lt, 0) + days
     balances["totalDays"] = sum(v for k, v in balances.items() if k != "totalDays")
     return {"balances": balances}
-

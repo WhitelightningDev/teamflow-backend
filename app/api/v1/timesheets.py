@@ -15,6 +15,8 @@ from app.schemas.time_entry_schema import (
     ManualTimeEntryIn,
     ManualTimeEntryUpdate,
     ClockInPayload,
+    PausePayload,
+    AbandonPayload,
     TimeEntryOut,
 )
 
@@ -491,6 +493,11 @@ async def clock_in(payload: ClockInPayload, db: AsyncIOMotorDatabase = Depends(g
         "end_ts": None,
         "break_minutes": 0,
         "break_started_at": None,
+        "paused_minutes": 0,
+        "paused_started_at": None,
+        "pause_last_reason": None,
+        "planned_resume_at": None,
+        "abandoned_reason": None,
         "is_active": True,
         "note": payload.note,
         "source": "clock",
@@ -524,9 +531,13 @@ async def clock_in(payload: ClockInPayload, db: AsyncIOMotorDatabase = Depends(g
         start_ts=doc["start_ts"],
         end_ts=None,
         break_minutes=0,
+        paused_minutes=0,
         is_active=True,
         on_break=False,
+        on_pause=False,
+        state="active",
         note=doc.get("note"),
+        planned_resume_at=None,
         rate=rate,
     )
 
@@ -538,6 +549,8 @@ async def break_start(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_
     ent = await db["time_entries"].find_one({"company_id": company_id, "employee_id": employee_id, "is_active": True})
     if not ent:
         raise HTTPException(status_code=400, detail="No active time entry to start a break")
+    if ent.get("paused_started_at"):
+        raise HTTPException(status_code=400, detail="Cannot start a break while job is paused")
     if ent.get("break_started_at"):
         raise HTTPException(status_code=400, detail="Already on a break")
     now = datetime.utcnow()
@@ -551,9 +564,12 @@ async def break_start(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_
         start_ts=ent.get("start_ts"),
         end_ts=ent.get("end_ts"),
         break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
         is_active=True,
         on_break=True,
+        on_pause=False,
         note=ent.get("note"),
+        planned_resume_at=ent.get("planned_resume_at"),
         rate=rate,
     )
 
@@ -579,9 +595,12 @@ async def break_end(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_us
         start_ts=ent.get("start_ts"),
         end_ts=ent.get("end_ts"),
         break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
         is_active=True,
         on_break=False,
+        on_pause=bool(ent.get("paused_started_at")),
         note=ent.get("note"),
+        planned_resume_at=ent.get("planned_resume_at"),
         rate=rate,
     )
 
@@ -600,7 +619,15 @@ async def clock_out(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_us
         add_minutes = max(0, int(delta.total_seconds() // 60))
         ent["break_minutes"] = int(ent.get("break_minutes", 0)) + add_minutes
         ent["break_started_at"] = None
+    # If currently paused, end pause
+    if ent.get("paused_started_at"):
+        delta = now - ent["paused_started_at"]
+        add_minutes = max(0, int(delta.total_seconds() // 60))
+        ent["paused_minutes"] = int(ent.get("paused_minutes", 0)) + add_minutes
+        ent["paused_started_at"] = None
     duration_minutes = max(0, int((now - ent["start_ts"]).total_seconds() // 60) - int(ent.get("break_minutes", 0)))
+    # Subtract paused time as well
+    duration_minutes = max(0, duration_minutes - int(ent.get("paused_minutes", 0)))
     await db["time_entries"].update_one(
         {"_id": ent["_id"]},
         {"$set": {"end_ts": now, "is_active": False, "break_minutes": int(ent.get("break_minutes", 0)), "duration_minutes": duration_minutes, "updated_at": now, "break_started_at": None}},
@@ -634,10 +661,193 @@ async def clock_out(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_us
         start_ts=ent.get("start_ts"),
         end_ts=ent.get("end_ts"),
         break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
         is_active=False,
         on_break=False,
+        on_pause=False,
         duration_minutes=int(ent.get("duration_minutes", 0)),
         note=ent.get("note"),
+        planned_resume_at=None,
+        rate=rate,
+        amount=amount,
+    )
+
+
+@router.post("/entries/pause", response_model=TimeEntryOut)
+async def pause_job(payload: PausePayload, db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    company_id = ObjectId(current_user["company_id"])
+    employee_id = await _get_current_employee_id(db, current_user)
+    ent = await db["time_entries"].find_one({"company_id": company_id, "employee_id": employee_id, "is_active": True})
+    if not ent:
+        raise HTTPException(status_code=400, detail="No active time entry to pause")
+    if ent.get("paused_started_at"):
+        raise HTTPException(status_code=400, detail="Job already paused")
+    now = datetime.utcnow()
+    # End break if on break
+    if ent.get("break_started_at"):
+        delta = now - ent["break_started_at"]
+        add_minutes = max(0, int(delta.total_seconds() // 60))
+        ent["break_minutes"] = int(ent.get("break_minutes", 0)) + add_minutes
+        ent["break_started_at"] = None
+    await db["time_entries"].update_one({"_id": ent["_id"]}, {"$set": {
+        "paused_started_at": now,
+        "pause_last_reason": (payload.reason or None),
+        "planned_resume_at": (payload.resume_at or None),
+        "updated_at": now,
+    }})
+    ent = await db["time_entries"].find_one({"_id": ent["_id"]})
+    rate = await _get_effective_rate(db, company_id, ent["job_id"], employee_id)
+    # Update assignment state and log
+    try:
+        job = await db["jobs"].find_one({"_id": ent["job_id"], "company_id": company_id})
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": ent["job_id"], "employee_id": employee_id},
+            {"$set": {"state": "paused", "state_changed_at": now, "updated_at": now}},
+        )
+        await db["assignment_activity"].insert_one({
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "job_id": ent["job_id"],
+            "job_name": (job or {}).get("name"),
+            "action": "paused",
+            "actor_user_id": ObjectId(current_user["id"]),
+            "note": payload.reason,
+            "created_at": now,
+        })
+    except Exception:
+        pass
+    return TimeEntryOut(
+        id=str(ent["_id"]),
+        job_id=str(ent["job_id"]),
+        employee_id=str(employee_id),
+        start_ts=ent.get("start_ts"),
+        end_ts=ent.get("end_ts"),
+        break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
+        is_active=True,
+        on_break=False,
+        on_pause=True,
+        state="paused",
+        note=ent.get("note"),
+        planned_resume_at=ent.get("planned_resume_at"),
+        pause_reason=ent.get("pause_last_reason"),
+        rate=rate,
+    )
+
+
+@router.post("/entries/resume", response_model=TimeEntryOut)
+async def resume_job(db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    company_id = ObjectId(current_user["company_id"])
+    employee_id = await _get_current_employee_id(db, current_user)
+    ent = await db["time_entries"].find_one({"company_id": company_id, "employee_id": employee_id, "is_active": True})
+    if not ent or not ent.get("paused_started_at"):
+        raise HTTPException(status_code=400, detail="No paused time entry to resume")
+    now = datetime.utcnow()
+    delta = now - ent["paused_started_at"]
+    add_minutes = max(0, int(delta.total_seconds() // 60))
+    new_total = int(ent.get("paused_minutes", 0)) + add_minutes
+    await db["time_entries"].update_one({"_id": ent["_id"]}, {"$set": {"paused_minutes": new_total, "paused_started_at": None, "planned_resume_at": None, "updated_at": now}})
+    ent = await db["time_entries"].find_one({"_id": ent["_id"]})
+    rate = await _get_effective_rate(db, company_id, ent["job_id"], employee_id)
+    # Update assignment state and log
+    try:
+        job = await db["jobs"].find_one({"_id": ent["job_id"], "company_id": company_id})
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": ent["job_id"], "employee_id": employee_id},
+            {"$set": {"state": "in_progress", "state_changed_at": now, "updated_at": now}},
+        )
+        await db["assignment_activity"].insert_one({
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "job_id": ent["job_id"],
+            "job_name": (job or {}).get("name"),
+            "action": "resumed",
+            "actor_user_id": ObjectId(current_user["id"]),
+            "created_at": now,
+        })
+    except Exception:
+        pass
+    return TimeEntryOut(
+        id=str(ent["_id"]),
+        job_id=str(ent["job_id"]),
+        employee_id=str(employee_id),
+        start_ts=ent.get("start_ts"),
+        end_ts=ent.get("end_ts"),
+        break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
+        is_active=True,
+        on_break=False,
+        on_pause=False,
+        state="active",
+        note=ent.get("note"),
+        planned_resume_at=None,
+        pause_reason=None,
+        rate=rate,
+    )
+
+
+@router.post("/entries/abandon", response_model=TimeEntryOut)
+async def abandon_job(payload: AbandonPayload, db: AsyncIOMotorDatabase = Depends(get_mongo_db), current_user=Depends(get_current_user)):
+    company_id = ObjectId(current_user["company_id"])
+    employee_id = await _get_current_employee_id(db, current_user)
+    ent = await db["time_entries"].find_one({"company_id": company_id, "employee_id": employee_id, "is_active": True})
+    if not ent:
+        raise HTTPException(status_code=400, detail="No active time entry to abandon")
+    now = datetime.utcnow()
+    # End break if on break
+    if ent.get("break_started_at"):
+        delta = now - ent["break_started_at"]
+        add_minutes = max(0, int(delta.total_seconds() // 60))
+        ent["break_minutes"] = int(ent.get("break_minutes", 0)) + add_minutes
+        ent["break_started_at"] = None
+    # End pause if paused
+    if ent.get("paused_started_at"):
+        delta = now - ent["paused_started_at"]
+        add_minutes = max(0, int(delta.total_seconds() // 60))
+        ent["paused_minutes"] = int(ent.get("paused_minutes", 0)) + add_minutes
+        ent["paused_started_at"] = None
+    duration_minutes = max(0, int((now - ent["start_ts"]).total_seconds() // 60) - int(ent.get("break_minutes", 0)) - int(ent.get("paused_minutes", 0)))
+    await db["time_entries"].update_one(
+        {"_id": ent["_id"]},
+        {"$set": {"end_ts": now, "is_active": False, "break_minutes": int(ent.get("break_minutes", 0)), "paused_minutes": int(ent.get("paused_minutes", 0)), "duration_minutes": duration_minutes, "updated_at": now, "abandoned_reason": (payload.reason or None)}},
+    )
+    ent = await db["time_entries"].find_one({"_id": ent["_id"]})
+    rate = await _get_effective_rate(db, company_id, ent["job_id"], employee_id)
+    amount = round((float(duration_minutes) / 60.0) * rate, 2) if duration_minutes else 0.0
+    # Update assignment state and log
+    try:
+        job = await db["jobs"].find_one({"_id": ent["job_id"], "company_id": company_id})
+        await db["job_assignments"].update_one(
+            {"company_id": company_id, "job_id": ent["job_id"], "employee_id": employee_id},
+            {"$set": {"state": "canceled", "state_changed_at": now, "updated_at": now}},
+        )
+        await db["assignment_activity"].insert_one({
+            "company_id": company_id,
+            "employee_id": employee_id,
+            "job_id": ent["job_id"],
+            "job_name": (job or {}).get("name"),
+            "action": "abandoned",
+            "actor_user_id": ObjectId(current_user["id"]),
+            "note": payload.reason,
+            "created_at": now,
+        })
+    except Exception:
+        pass
+    return TimeEntryOut(
+        id=str(ent["_id"]),
+        job_id=str(ent["job_id"]),
+        employee_id=str(employee_id),
+        start_ts=ent.get("start_ts"),
+        end_ts=ent.get("end_ts"),
+        break_minutes=int(ent.get("break_minutes", 0)),
+        paused_minutes=int(ent.get("paused_minutes", 0)),
+        is_active=False,
+        on_break=False,
+        on_pause=False,
+        state="abandoned",
+        duration_minutes=int(ent.get("duration_minutes", 0)),
+        note=ent.get("note"),
+        planned_resume_at=None,
         rate=rate,
         amount=amount,
     )
@@ -775,9 +985,13 @@ async def my_time_entries(
             dur = int(dur_val)
         else:
             if doc.get("end_ts"):
-                dur = max(0, int(((doc.get("end_ts") - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0))))
+                dur = max(0, int(((doc.get("end_ts") - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0)) - int(doc.get("paused_minutes", 0))))
             elif doc.get("is_active"):
-                dur = max(0, int(((datetime.utcnow() - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0))))
+                # If paused right now, add current paused span to paused total for display purposes
+                paused_total = int(doc.get("paused_minutes", 0))
+                if doc.get("paused_started_at"):
+                    paused_total += max(0, int(((datetime.utcnow() - doc.get("paused_started_at")).total_seconds() // 60)))
+                dur = max(0, int(((datetime.utcnow() - doc.get("start_ts")).total_seconds() // 60) - int(doc.get("break_minutes", 0)) - paused_total))
             else:
                 dur = 0
         amount = round((float(dur) / 60.0) * rate, 2) if dur else 0.0
@@ -788,8 +1002,13 @@ async def my_time_entries(
             "start_ts": doc.get("start_ts"),
             "end_ts": doc.get("end_ts"),
             "break_minutes": int(doc.get("break_minutes", 0)),
+            "paused_minutes": int(doc.get("paused_minutes", 0)),
             "is_active": bool(doc.get("is_active", False)),
             "on_break": bool(doc.get("break_started_at") is not None),
+            "on_pause": bool(doc.get("paused_started_at") is not None),
+            "state": ("abandoned" if (doc.get("end_ts") and doc.get("abandoned_reason")) else ("completed" if doc.get("end_ts") else ("paused" if doc.get("paused_started_at") else "active"))),
+            "planned_resume_at": doc.get("planned_resume_at"),
+            "pause_reason": doc.get("pause_last_reason"),
             "duration_minutes": dur or None,
             "note": doc.get("note"),
             "rate": rate,
