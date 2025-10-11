@@ -457,6 +457,116 @@ async def list_company_assignments(
     return {"items": items, "total": total, "page": page, "limit": limit}
 
 
+# ---------------------- Admin assignment details ----------------------
+
+
+@router.get("/assignments/details")
+async def assignment_details(
+    employee_id: str = Query(..., description="Employee id (string ObjectId)"),
+    job_id: str = Query(..., description="Job id (string ObjectId)"),
+    db: AsyncIOMotorDatabase = Depends(get_mongo_db),
+    current_user=Depends(get_current_user),
+):
+    """Detailed audit of a specific job assignment for an employee.
+    Includes timeline events, time entries, and rollups. Admin-like roles only.
+    """
+    if not is_admin_like(str(current_user.get("role", ""))):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    company_id = ObjectId(current_user["company_id"])
+    emp_oid = ObjectId(employee_id)
+    job_oid = ObjectId(job_id)
+
+    # Core docs
+    job = await db["jobs"].find_one({"_id": job_oid, "company_id": company_id})
+    emp = await db["employees"].find_one({"_id": emp_oid, "company_id": company_id})
+    assign = await db["job_assignments"].find_one({"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid})
+
+    # Timeline events
+    events_cursor = db["assignment_activity"].find({
+        "company_id": company_id,
+        "job_id": job_oid,
+        "employee_id": emp_oid,
+    }).sort("created_at", 1)
+    events: list[dict] = []
+    actor_ids: set[ObjectId] = set()
+    async for ev in events_cursor:
+        actor_id = ev.get("actor_user_id")
+        if actor_id:
+            actor_ids.add(actor_id)
+        events.append({
+            "action": ev.get("action"),
+            "created_at": ev.get("created_at"),
+            "note": ev.get("note"),
+            "actor_user_id": str(actor_id) if actor_id else None,
+        })
+    # Resolve actor names
+    actors: dict[str, str] = {}
+    if actor_ids:
+        cursor = db["users"].find({"_id": {"$in": list(actor_ids)}})
+        async for u in cursor:
+            actors[str(u["_id"])]= f"{u.get('first_name','')} {u.get('last_name','')}".strip() or u.get("email","user")
+    for ev in events:
+        ev["actor_name"] = actors.get(ev["actor_user_id"] or "", None)
+
+    # Time entries for this job/employee
+    q = {"company_id": company_id, "job_id": job_oid, "employee_id": emp_oid}
+    ten_cursor = db["time_entries"].find(q).sort("start_ts", 1)
+    entries: list[dict] = []
+    totals = {"entries": 0, "minutes": 0, "break_minutes": 0, "paused_minutes": 0, "amount": 0.0}
+    async for t in ten_cursor:
+        # Compute duration if missing
+        if t.get("duration_minutes") is None and t.get("end_ts"):
+            dur = max(0, int(((t.get("end_ts") - t.get("start_ts")).total_seconds() // 60) - int(t.get("break_minutes", 0)) - int(t.get("paused_minutes", 0))))
+        elif t.get("is_active"):
+            paused_total = int(t.get("paused_minutes", 0))
+            if t.get("paused_started_at"):
+                paused_total += max(0, int(((datetime.utcnow() - t.get("paused_started_at")).total_seconds() // 60)))
+            dur = max(0, int(((datetime.utcnow() - t.get("start_ts")).total_seconds() // 60) - int(t.get("break_minutes", 0)) - paused_total))
+        else:
+            dur = int(t.get("duration_minutes") or 0)
+        # Effective rate
+        rate = await _get_effective_rate(db, company_id, t["job_id"], t["employee_id"])
+        amount = round((float(dur) / 60.0) * rate, 2) if dur else 0.0
+        totals["entries"] += 1
+        totals["minutes"] += int(dur)
+        totals["break_minutes"] += int(t.get("break_minutes", 0))
+        totals["paused_minutes"] += int(t.get("paused_minutes", 0))
+        totals["amount"] = round(totals["amount"] + amount, 2)
+        entries.append({
+            "id": str(t["_id"]),
+            "start_ts": t.get("start_ts"),
+            "end_ts": t.get("end_ts"),
+            "break_minutes": int(t.get("break_minutes", 0)),
+            "paused_minutes": int(t.get("paused_minutes", 0)),
+            "duration_minutes": dur or None,
+            "is_active": bool(t.get("is_active", False)),
+            "on_break": bool(t.get("break_started_at") is not None),
+            "on_pause": bool(t.get("paused_started_at") is not None),
+            "state": ("abandoned" if (t.get("end_ts") and t.get("abandoned_reason")) else ("completed" if t.get("end_ts") else ("paused" if t.get("paused_started_at") else "active"))),
+            "note": t.get("note"),
+            "pause_reason": t.get("pause_last_reason"),
+            "abandoned_reason": t.get("abandoned_reason"),
+            "planned_resume_at": t.get("planned_resume_at"),
+            "rate": rate,
+            "amount": amount,
+        })
+
+    # Build response
+    return {
+        "job": {"id": job_id, "name": (job or {}).get("name", ""), "client_name": (job or {}).get("client_name")},
+        "employee": {"id": employee_id, "name": f"{(emp or {}).get('first_name','')} {(emp or {}).get('last_name','')}".strip() or (emp or {}).get("email")},
+        "assignment": {
+            "state": (assign or {}).get("state", "assigned"),
+            "state_changed_at": (assign or {}).get("state_changed_at"),
+            "created_at": (assign or {}).get("created_at"),
+            "updated_at": (assign or {}).get("updated_at"),
+        },
+        "timeline": events,
+        "entries": entries,
+        "totals": totals,
+    }
+
+
 # ---------------------- Time entries ----------------------
 
 
