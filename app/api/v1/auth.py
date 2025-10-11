@@ -5,7 +5,9 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.db.mongo import get_mongo_db
 from app.core.security import get_current_user, hash_password, verify_password, create_jwt
-from app.schemas.auth_schema import UserIn, LoginIn, UserOut, AuthResponse
+from app.schemas.auth_schema import UserIn, LoginIn, UserOut, AuthResponse, ForgotPasswordIn, ResetPasswordIn
+from app.utils.email import send_password_reset_email
+import secrets, hashlib
 from app.schemas.invite_schema import AcceptInviteIn
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -116,3 +118,51 @@ async def accept_invite(payload: AcceptInviteIn, db: AsyncIOMotorDatabase = Depe
     u = await db["users"].find_one({"_id": user_id})
     user_out = {"id": str(user_id), "first_name": u.get("first_name", ""), "last_name": u.get("last_name", ""), "email": u.get("email", ""), "role": u.get("role", "employee")}
     return {"user": user_out, "token": token}
+
+
+@router.post("/forgot-password")
+async def forgot_password(payload: ForgotPasswordIn, db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    """Request a password reset link. Always returns success to avoid user enumeration."""
+    user = await db["users"].find_one({"email": payload.email})
+    if user:
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        now = datetime.utcnow()
+        expires = now + timedelta(hours=24)
+        await db["password_resets"].insert_one({
+            "user_id": user["_id"],
+            "email": user["email"],
+            "token_hash": token_hash,
+            "used": False,
+            "created_at": now,
+            "expires_at": expires,
+        })
+        # Build reset URL
+        from app.core.config import settings as cfg
+        base = (cfg.FRONTEND_BASE_URL or "").rstrip('/') or "http://localhost:5173"
+        url = f"{base}/reset-password?token={token}"
+        try:
+            send_password_reset_email(to=user["email"], reset_url=url, company_name="TeamFlow", first_name=user.get("first_name"))
+        except Exception:
+            # Email failures are non-fatal to avoid leaking existence
+            pass
+    return {"status": "ok"}
+
+
+@router.post("/reset-password")
+async def reset_password(payload: ResetPasswordIn, db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    token_hash = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
+    rec = await db["password_resets"].find_one({"token_hash": token_hash})
+    if not rec or rec.get("used") or (rec.get("expires_at") and rec["expires_at"] < datetime.utcnow()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired token")
+    user = await db["users"].find_one({"_id": rec["user_id"], "email": rec["email"]})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token")
+    await db["users"].update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(payload.new_password), "updated_at": datetime.utcnow()}})
+    await db["password_resets"].update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": datetime.utcnow()}})
+    # Invalidate other outstanding reset tokens for this user
+    try:
+        await db["password_resets"].update_many({"user_id": user["_id"], "used": False}, {"$set": {"used": True, "used_at": datetime.utcnow()}})
+    except Exception:
+        pass
+    return {"status": "reset"}

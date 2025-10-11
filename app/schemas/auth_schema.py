@@ -25,3 +25,12 @@ class UserOut(BaseModel):
 class AuthResponse(BaseModel):
     user: UserOut
     token: str
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
