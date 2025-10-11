@@ -79,3 +79,4 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     # Assignment activity feed
     assignment_activity = db["assignment_activity"]
     await assignment_activity.create_index([("company_id", 1), ("employee_id", 1), ("created_at", -1)], name="idx_assign_activity_emp_created")
+    await assignment_activity.create_index([("company_id", 1), ("job_id", 1), ("employee_id", 1), ("created_at", -1)], name="idx_assign_activity_job_emp_created")
