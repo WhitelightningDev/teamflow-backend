@@ -80,3 +80,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     assignment_activity = db["assignment_activity"]
     await assignment_activity.create_index([("company_id", 1), ("employee_id", 1), ("created_at", -1)], name="idx_assign_activity_emp_created")
     await assignment_activity.create_index([("company_id", 1), ("job_id", 1), ("employee_id", 1), ("created_at", -1)], name="idx_assign_activity_job_emp_created")
+
+    # Password reset tokens
+    pw_resets = db["password_resets"]
+    await pw_resets.create_index([("token_hash", 1)], unique=True, name="uniq_pwreset_token")
+    await pw_resets.create_index([("email", 1), ("created_at", -1)], name="idx_pwreset_email_created")
+    await pw_resets.create_index([("expires_at", 1)], name="idx_pwreset_expires")

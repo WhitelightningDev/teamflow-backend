@@ -104,3 +104,27 @@ def send_invite_email(*, to: str, invite_url: str, company_name: str = "TeamFlow
         text_body=text,
     )
     send_email_smtp(msg)
+
+
+def send_password_reset_email(*, to: str, reset_url: str, company_name: str = "TeamFlow", first_name: str | None = None) -> None:
+    html = render_template(
+        "reset_password.html",
+        {
+            "company_name": company_name,
+            "reset_url": reset_url,
+            "first_name": first_name or "there",
+        },
+    )
+    text = (
+        f"Hello {first_name or 'there'},\n\n"
+        f"We received a request to reset your {company_name} account password.\n"
+        f"Reset your password: {reset_url}\n\n"
+        "If you didn’t request this, you can ignore this email."
+    )
+    msg = _build_message(
+        subject=f"Reset your {company_name} password",
+        to=to,
+        html_body=html,
+        text_body=text,
+    )
+    send_email_smtp(msg)
