@@ -245,6 +245,10 @@ async def dashboard_export_csv(
         ["documents_this_week", str(m.documents_this_week)],
         ["on_leave_today", str(m.on_leave_today)],
     ]
-    csv = "\n".join(",".join(f'"{c.replace("\"", "\"\"")}"' for c in row) for row in lines)
+    # RFC 4180: quote values and double-quote embedded quotes
+    csv = "\n".join(
+        ",".join('"' + c.replace('"', '""') + '"' for c in row)
+        for row in lines
+    )
     return PlainTextResponse(content=csv, media_type="text/csv; charset=utf-8")
 
