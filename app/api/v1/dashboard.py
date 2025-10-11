@@ -84,45 +84,70 @@ async def dashboard_alerts(
 
 @router.get("/trends", response_model=list[TrendSeries])
 async def dashboard_trends(
-    months: int = Query(6, ge=1, le=24),
+    months: int = Query(6, ge=1, le=24, description="Deprecated; use window"),
+    window: Optional[str] = Query(None, description="One of: 6m,3m,1m,7d"),
     db: AsyncIOMotorDatabase = Depends(get_mongo_db),
     current_user=Depends(get_current_user),
 ):
     if not features.trends:
         raise HTTPException(status_code=404, detail="Trends disabled")
     company_id = ObjectId(current_user["company_id"])
-    # Employee headcount over last N months
     now = datetime.utcnow()
-    start_month = datetime(now.year, now.month, 1)
+
+    # Decide window
+    win = (window or "").lower().strip()
+    if win not in {"6m", "3m", "1m", "7d", ""}:
+        raise HTTPException(status_code=400, detail="Invalid window; expected 6m,3m,1m,7d")
+
     points: list[TrendPoint] = []
-    for i in range(months - 1, -1, -1):
-        # Compute month window
-        year = start_month.year
-        month = start_month.month
-        # subtract i months
-        m = month - i
-        y = year
-        while m <= 0:
-            m += 12
-            y -= 1
-        start = datetime(y, m, 1)
-        # next month
-        nm = m + 1
-        ny = y + (1 if nm == 13 else 0)
-        nm = 1 if nm == 13 else nm
-        end = datetime(ny, nm, 1)
-        # Count active employees as of end of this month
-        count = await db["employees"].count_documents({
-            "company_id": company_id,
-            "$and": [
-                {"date_hired": {"$lt": end}},
-                {"$or": [
-                    {"date_terminated": None},
-                    {"date_terminated": {"$gte": start}},
-                ]},
-            ],
-        })
-        points.append(TrendPoint(period=f"{y:04d}-{m:02d}", value=int(count)))
+    if win == "7d":
+        # Daily headcount for last 7 days
+        # Produce 7 points for days D-6 .. D (inclusive)
+        start_day = datetime(now.year, now.month, now.day)
+        for i in range(6, -1, -1):
+            day_start = start_day - timedelta(days=i)
+            day_end = day_start + timedelta(days=1)
+            count = await db["employees"].count_documents({
+                "company_id": company_id,
+                "$and": [
+                    {"date_hired": {"$lt": day_end}},
+                    {"$or": [
+                        {"date_terminated": None},
+                        {"date_terminated": {"$gte": day_start}},
+                    ]},
+                ],
+            })
+            points.append(TrendPoint(period=f"{day_start.year:04d}-{day_start.month:02d}-{day_start.day:02d}", value=int(count)))
+    else:
+        # Monthly headcount for last N months (default 6m if window empty)
+        months_to_show = 6 if win == "" else (6 if win == "6m" else (3 if win == "3m" else 1))
+        start_month = datetime(now.year, now.month, 1)
+        for i in range(months_to_show - 1, -1, -1):
+            # Compute month window
+            year = start_month.year
+            month = start_month.month
+            m = month - i
+            y = year
+            while m <= 0:
+                m += 12
+                y -= 1
+            start = datetime(y, m, 1)
+            nm = m + 1
+            ny = y + (1 if nm == 13 else 0)
+            nm = 1 if nm == 13 else nm
+            end = datetime(ny, nm, 1)
+            count = await db["employees"].count_documents({
+                "company_id": company_id,
+                "$and": [
+                    {"date_hired": {"$lt": end}},
+                    {"$or": [
+                        {"date_terminated": None},
+                        {"date_terminated": {"$gte": start}},
+                    ]},
+                ],
+            })
+            points.append(TrendPoint(period=f"{y:04d}-{m:02d}", value=int(count)))
+
     return [TrendSeries(key="employees", label="Employees", points=points)]
 
 
@@ -251,4 +276,3 @@ async def dashboard_export_csv(
         for row in lines
     )
     return PlainTextResponse(content=csv, media_type="text/csv; charset=utf-8")
-
