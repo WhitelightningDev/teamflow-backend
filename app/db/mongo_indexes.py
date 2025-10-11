@@ -18,17 +18,22 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     await employees.create_index([("company_id", 1)], name="idx_company_id_emp")
     # Optional index on email to accelerate lookups
     await employees.create_index([("email", 1)], name="idx_employee_email")
+    # Hire/termination dates for trend queries
+    await employees.create_index([("date_hired", 1)], name="idx_emp_date_hired")
+    await employees.create_index([("date_terminated", 1)], name="idx_emp_date_term")
 
     leaves = db["leaves"]
     # Indexes for leaves collection
     await leaves.create_index([("employee_id", 1)], name="idx_employee_id_leave")
     await leaves.create_index([("status", 1)], name="idx_status_leave")
     await leaves.create_index([("company_id", 1), ("status", 1)], name="idx_company_status_leave")
+    await leaves.create_index([("company_id", 1), ("start_date", 1), ("end_date", 1)], name="idx_company_leave_dates")
 
     documents = db["documents"]
     # Indexes for documents collection
     await documents.create_index([("company_id", 1)], name="idx_company_id_doc")
     await documents.create_index([("employee_id", 1)], name="idx_employee_id_doc")
+    await documents.create_index([("uploaded_at", -1)], name="idx_doc_uploaded_at")
 
     lookups = db["lookups"]
     # Composite index on (category, code)

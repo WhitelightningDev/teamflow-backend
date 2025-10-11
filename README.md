@@ -79,6 +79,22 @@ Quickstart
   - `uvicorn main:app --reload --port 5001`
   - Health: GET `http://localhost:5001/health`
 
+Dashboard Analytics (new)
+- Endpoints under `/api/v1/dashboard` provide admin dashboard features:
+  - `GET /summary` → employees, pending leaves, documents this week, on leave today
+  - `GET /alerts` → red flags based on thresholds (pending leaves)
+  - `GET /trends?months=6` → headcount trend points for last N months
+  - `GET /scorecards` → department scorecards (employees, pending leaves, active assignments)
+  - `GET /drilldown?metric=pending_leaves&group_by=department` → breakdown by department
+  - `GET /export.csv` → CSV export of summary metrics
+- Feature flags (env vars; default enabled):
+  - `FEATURE_DASHBOARD_ALERTS`, `FEATURE_DASHBOARD_TRENDS`, `FEATURE_DASHBOARD_DRILLDOWN`, `FEATURE_DASHBOARD_EXPORT`, `FEATURE_DASHBOARD_SCORECARDS`
+- Frontend flags (Vite env; default enabled):
+  - `VITE_FEATURE_DASHBOARD_ALERTS`, `VITE_FEATURE_DASHBOARD_TRENDS`, `VITE_FEATURE_DASHBOARD_DRILLDOWN`, `VITE_FEATURE_DASHBOARD_EXPORT`, `VITE_FEATURE_DASHBOARD_SCORECARDS`
+
+Audit utility
+- `python3 scripts/audit_dashboard_features.py --frontend /path/to/teamflow` prints JSON status for key analytics features.
+
 Seeding MongoDB
 - Purpose: populate required collections with sample data (companies, settings, lookups, users, employees, leaves, documents).
 - Command:
