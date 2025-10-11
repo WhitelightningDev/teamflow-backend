@@ -32,3 +32,43 @@ def get_roles(db=Depends(get_db), current_user=Depends(get_current_user)):
         "trainer",
         "benefit_admin",
     ]
+
+
+@router.get("/time-reasons")
+def get_time_reasons(db=Depends(get_db), current_user=Depends(get_current_user)):
+    """Predefined reasons for pausing/abandoning jobs (suggested list)."""
+    return {
+        "pause": [
+            "Network/Wi-Fi outage",
+            "Blocked by dependency",
+            "Awaiting approvals",
+            "Equipment failure",
+            "Power outage",
+            "Weather conditions",
+            "Site access issues",
+        ],
+        "abandon": [
+            "Job canceled",
+            "Client canceled",
+            "Reassigned",
+            "Duplicate work",
+            "Scope changed",
+            "Unable to proceed",
+        ],
+    }
+
+
+@router.get("/provinces", response_model=List[str])
+def get_provinces(db=Depends(get_db), current_user=Depends(get_current_user)):
+    # South African provinces (ISO 3166-2:ZA region names)
+    return [
+        "Eastern Cape",
+        "Free State",
+        "Gauteng",
+        "KwaZulu-Natal",
+        "Limpopo",
+        "Mpumalanga",
+        "North West",
+        "Northern Cape",
+        "Western Cape",
+    ]

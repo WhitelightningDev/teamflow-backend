@@ -57,6 +57,8 @@ class EmployeeDocument(BaseModel):
     date_hired: date
     date_terminated: Optional[date] = None
     profile_photo: Optional[str] = None
+    # Location (e.g., South African province)
+    province: Optional[str] = None
     # Optional metadata/tags
     metadata: Optional[dict] = None
     tags: Optional[list[str]] = None

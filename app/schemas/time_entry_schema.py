@@ -30,10 +30,23 @@ class TimeEntryOut(BaseModel):
     start_ts: Optional[datetime] = None
     end_ts: Optional[datetime] = None
     break_minutes: int
+    paused_minutes: Optional[int] = None
     is_active: bool
     on_break: bool
+    on_pause: Optional[bool] = None
+    state: Optional[str] = None  # active | paused | completed | abandoned
+    planned_resume_at: Optional[datetime] = None
+    pause_reason: Optional[str] = None
     duration_minutes: Optional[int] = None
     note: Optional[str] = None
     rate: Optional[float] = None
     amount: Optional[float] = None
 
+
+class PausePayload(BaseModel):
+    reason: Optional[str] = None
+    resume_at: Optional[datetime] = None
+
+
+class AbandonPayload(BaseModel):
+    reason: Optional[str] = None
