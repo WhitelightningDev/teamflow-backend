@@ -86,3 +86,8 @@ async def ensure_indexes(db: AsyncIOMotorDatabase | None = None) -> None:
     await pw_resets.create_index([("token_hash", 1)], unique=True, name="uniq_pwreset_token")
     await pw_resets.create_index([("email", 1), ("created_at", -1)], name="idx_pwreset_email_created")
     await pw_resets.create_index([("expires_at", 1)], name="idx_pwreset_expires")
+
+    # OAuth state storage (CSRF protection)
+    oauth_states = db["oauth_states"]
+    await oauth_states.create_index([("state", 1)], unique=True, name="uniq_oauth_state")
+    await oauth_states.create_index([("created_at", 1)], name="idx_oauth_state_created")
