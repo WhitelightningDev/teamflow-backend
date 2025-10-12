@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import RedirectResponse
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -9,6 +10,8 @@ from app.schemas.auth_schema import UserIn, LoginIn, UserOut, AuthResponse, Forg
 from app.utils.email import send_password_reset_email
 import secrets, hashlib
 from app.schemas.invite_schema import AcceptInviteIn
+from app.core.config import settings
+import httpx
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -56,6 +59,14 @@ async def register(payload: UserIn, db: AsyncIOMotorDatabase = Depends(get_mongo
     token = create_jwt({"sub": str(uid), "company_id": str(company_id)})
     user_out = {"id": str(uid), "first_name": payload.first_name, "last_name": payload.last_name, "email": payload.email, "role": "admin"}
     return {"user": user_out, "token": token}
+
+
+def _external_base(request: Request) -> str:
+    if settings.BACKEND_EXTERNAL_BASE_URL:
+        return settings.BACKEND_EXTERNAL_BASE_URL.rstrip('/')
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    return f"{proto}://{host}" if host else str(request.base_url).rstrip('/')
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -166,3 +177,176 @@ async def reset_password(payload: ResetPasswordIn, db: AsyncIOMotorDatabase = De
     except Exception:
         pass
     return {"status": "reset"}
+
+
+# ---------------------- OAuth: Google ----------------------
+
+
+@router.get("/oauth/google/start")
+async def google_oauth_start(request: Request, next: str = "/dashboard", db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=400, detail="Google OAuth not configured")
+    state = secrets.token_urlsafe(32)
+    await db["oauth_states"].insert_one({"state": state, "provider": "google", "next": next, "created_at": datetime.utcnow()})
+    redirect_uri = f"{_external_base(request)}/api/v1/auth/oauth/google/callback"
+    qp = httpx.QueryParams({"redirect_uri": redirect_uri})
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={settings.GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={qp['redirect_uri']}"
+        "&response_type=code&scope=openid%20email%20profile"
+        f"&state={state}"
+        "&access_type=offline&prompt=consent"
+    )
+    return RedirectResponse(auth_url, status_code=302)
+
+
+@router.get("/oauth/google/callback")
+async def google_oauth_callback(request: Request, code: str = "", state: str = "", db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    rec = await db["oauth_states"].find_one({"state": state, "provider": "google"})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    try:
+        await db["oauth_states"].delete_one({"_id": rec["_id"]})
+    except Exception:
+        pass
+    redirect_uri = f"{_external_base(request)}/api/v1/auth/oauth/google/callback"
+    token_url = "https://oauth2.googleapis.com/token"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(token_url, data={
+            "code": code,
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+        if resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="OAuth exchange failed")
+        tok = resp.json()
+        access_token = tok.get("access_token")
+        uinfo = {}
+        try:
+            ures = await client.get("https://openidconnect.googleapis.com/v1/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+            if ures.status_code == 200:
+                uinfo = ures.json()
+        except Exception:
+            pass
+    email = (uinfo.get("email") if uinfo else None)
+    first_name = (uinfo.get("given_name") if uinfo else None) or ""
+    last_name = (uinfo.get("family_name") if uinfo else None) or ""
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not available from provider")
+    user = await db["users"].find_one({"email": email})
+    now = datetime.utcnow()
+    if not user:
+        company = {"name": f"{email.split('@')[-1]}", "created_at": now, "updated_at": now, "timezone": "UTC"}
+        cres = await db["companies"].insert_one(company)
+        user_doc = {
+            "email": email,
+            "password_hash": hash_password(secrets.token_urlsafe(16)),
+            "first_name": first_name,
+            "last_name": last_name,
+            "role": "admin",
+            "company_id": cres.inserted_id,
+            "created_at": now,
+            "updated_at": now,
+            "is_active": True,
+            "last_login": now,
+            "profile_photo_url": None,
+            "oauth_provider": "google",
+        }
+        ures = await db["users"].insert_one(user_doc)
+        user = await db["users"].find_one({"_id": ures.inserted_id})
+    else:
+        await db["users"].update_one({"_id": user["_id"]}, {"$set": {"last_login": now, "oauth_provider": "google"}})
+    token = create_jwt({"sub": str(user["_id"]), "company_id": str(user["company_id"])})
+    next_path = rec.get("next") or "/dashboard"
+    qp_next = httpx.QueryParams({"n": next_path})
+    dest = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/oauth/callback?token={token}&next={qp_next['n']}"
+    return RedirectResponse(dest, status_code=302)
+
+
+# ---------------------- OAuth: Microsoft ----------------------
+
+
+@router.get("/oauth/microsoft/start")
+async def ms_oauth_start(request: Request, next: str = "/dashboard", db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    if not settings.MS_CLIENT_ID or not settings.MS_CLIENT_SECRET:
+        raise HTTPException(status_code=400, detail="Microsoft OAuth not configured")
+    state = secrets.token_urlsafe(32)
+    await db["oauth_states"].insert_one({"state": state, "provider": "microsoft", "next": next, "created_at": datetime.utcnow()})
+    redirect_uri = f"{_external_base(request)}/api/v1/auth/oauth/microsoft/callback"
+    qp = httpx.QueryParams({"redirect_uri": redirect_uri})
+    auth_url = (
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+        f"?client_id={settings.MS_CLIENT_ID}"
+        f"&redirect_uri={qp['redirect_uri']}"
+        "&response_type=code&scope=openid%20email%20profile&response_mode=query"
+        f"&state={state}"
+    )
+    return RedirectResponse(auth_url, status_code=302)
+
+
+@router.get("/oauth/microsoft/callback")
+async def ms_oauth_callback(request: Request, code: str = "", state: str = "", db: AsyncIOMotorDatabase = Depends(get_mongo_db)):
+    rec = await db["oauth_states"].find_one({"state": state, "provider": "microsoft"})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    try:
+        await db["oauth_states"].delete_one({"_id": rec["_id"]})
+    except Exception:
+        pass
+    redirect_uri = f"{_external_base(request)}/api/v1/auth/oauth/microsoft/callback"
+    token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(token_url, data={
+            "client_id": settings.MS_CLIENT_ID,
+            "client_secret": settings.MS_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        if resp.status_code != 200:
+            raise HTTPException(status_code=400, detail="OAuth exchange failed")
+        tok = resp.json()
+        access_token = tok.get("access_token")
+        uinfo = {}
+        try:
+            ures = await client.get("https://graph.microsoft.com/oidc/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+            if ures.status_code == 200:
+                uinfo = ures.json()
+        except Exception:
+            pass
+    email = (uinfo.get("email") or uinfo.get("preferred_username")) if uinfo else None
+    first_name = (uinfo.get("given_name") if uinfo else None) or ""
+    last_name = (uinfo.get("family_name") if uinfo else None) or ""
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not available from provider")
+    user = await db["users"].find_one({"email": email})
+    now = datetime.utcnow()
+    if not user:
+        company = {"name": f"{email.split('@')[-1]}", "created_at": now, "updated_at": now, "timezone": "UTC"}
+        cres = await db["companies"].insert_one(company)
+        user_doc = {
+            "email": email,
+            "password_hash": hash_password(secrets.token_urlsafe(16)),
+            "first_name": first_name,
+            "last_name": last_name,
+            "role": "admin",
+            "company_id": cres.inserted_id,
+            "created_at": now,
+            "updated_at": now,
+            "is_active": True,
+            "last_login": now,
+            "profile_photo_url": None,
+            "oauth_provider": "microsoft",
+        }
+        ures = await db["users"].insert_one(user_doc)
+        user = await db["users"].find_one({"_id": ures.inserted_id})
+    else:
+        await db["users"].update_one({"_id": user["_id"]}, {"$set": {"last_login": now, "oauth_provider": "microsoft"}})
+    token = create_jwt({"sub": str(user["_id"]), "company_id": str(user["company_id"])})
+    next_path = rec.get("next") or "/dashboard"
+    qp_next = httpx.QueryParams({"n": next_path})
+    dest = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/oauth/callback?token={token}&next={qp_next['n']}"
+    return RedirectResponse(dest, status_code=302)
