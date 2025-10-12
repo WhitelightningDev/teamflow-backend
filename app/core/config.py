@@ -17,6 +17,13 @@ class Settings:
         self.ALLOWED_ORIGINS: list[str] = [
             o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
         ]
+        # OAuth providers
+        self.GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+        self.GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        self.MS_CLIENT_ID: str = os.getenv("MS_CLIENT_ID", "")
+        self.MS_CLIENT_SECRET: str = os.getenv("MS_CLIENT_SECRET", "")
+        # Optional: explicit external URL for backend callbacks; if unset, computed from request
+        self.BACKEND_EXTERNAL_BASE_URL: str = os.getenv("BACKEND_EXTERNAL_BASE_URL", "")
 
 
 settings = Settings()

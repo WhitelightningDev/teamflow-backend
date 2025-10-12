@@ -10,3 +10,4 @@ dnspython>=2.2
 python-jose[cryptography]
 jinja2
 python-multipart
+httpx
